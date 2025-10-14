@@ -12,7 +12,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_blue_plus: ^1.31.16 # La librería principal para la comunicación Bluetooth LE
+  flutter_blue_plus: ^1.31.16 
+  provider: ^6.1.2 
+  syncfusion_flutter_gauges: ^26.1.35   
 
 
 dev_dependencies:
