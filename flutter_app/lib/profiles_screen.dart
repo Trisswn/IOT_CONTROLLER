@@ -50,7 +50,7 @@ class ProfilesScreen extends StatelessWidget {
             ),
             onTap: () {
               state.setActiveProfile(profile);
-              Navigator.of(context).pop(); // Vuelve a la pantalla principal
+              Navigator.of(context).pop(profile); // Vuelve a la pantalla principal
             },
           );
         },

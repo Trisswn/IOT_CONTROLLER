@@ -3,10 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'smart_home_state.dart';
 import 'profile_model.dart';
-import 'package:flutter/services.dart'; // Para input formatters
+import 'package:flutter/services.dart';
 
 class ProfileEditScreen extends StatefulWidget {
-  final int? profileIndex; // Opcional, para editar un perfil existente
+  final int? profileIndex;
 
   const ProfileEditScreen({super.key, this.profileIndex});
 
@@ -36,7 +36,6 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     if (widget.profileIndex != null) {
       profile = state.profiles[widget.profileIndex!];
     } else {
-      // Valores por defecto para un nuevo perfil
       profile = UserProfile(name: '');
     }
 
@@ -51,11 +50,9 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     _updateLightModes(profile.lightOnInterval, profile.lightOffInterval, profile.autoOffDuration);
   }
 
-  // Actualiza los flags de modo parpadeo/autoapagado basado en los valores
   void _updateLightModes(int onInterval, int offInterval, int autoOff) {
      _isBlinking = onInterval > 0 && offInterval > 0;
      _isAutoOff = autoOff > 0 && !_isBlinking;
-     // Asegurarse de que no estén activos ambos modos a la vez
      if (_isBlinking) {
        _autoOffDurationController.text = '0';
      }
@@ -64,7 +61,6 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
        _lightOffIntervalController.text = '0';
      }
   }
-
 
   @override
   void dispose() {
@@ -78,16 +74,32 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
 
   void _saveForm() {
     if (_formKey.currentState!.validate()) {
-      _formKey.currentState!.save(); // Asegura que los onSaved se llamen
+      _formKey.currentState!.save();
 
-      // Obtener valores de los controladores
       final name = _nameController.text;
-      final lightOnInterval = int.tryParse(_lightOnIntervalController.text) ?? 0;
-      final lightOffInterval = int.tryParse(_lightOffIntervalController.text) ?? 0;
-      final autoOffDuration = int.tryParse(_autoOffDurationController.text) ?? 0;
+      
+      // ✅ CORRECCIÓN CRÍTICA: Asegurar que los valores sean 0 cuando no están en uso
+      int lightOnInterval = 0;
+      int lightOffInterval = 0;
+      int autoOffDuration = 0;
+      
+      if (_lightsEnabled) {
+        if (_isBlinking) {
+          // Solo parpadeo
+          lightOnInterval = int.tryParse(_lightOnIntervalController.text) ?? 0;
+          lightOffInterval = int.tryParse(_lightOffIntervalController.text) ?? 0;
+          autoOffDuration = 0; // ⭐ Importante: asegurar que sea 0
+        } else if (_isAutoOff) {
+          // Solo auto-apagado
+          lightOnInterval = 0; // ⭐ Importante: asegurar que sea 0
+          lightOffInterval = 0; // ⭐ Importante: asegurar que sea 0
+          autoOffDuration = int.tryParse(_autoOffDurationController.text) ?? 0;
+        }
+        // Si no es ninguno, todos quedan en 0 (control manual)
+      }
+      
       final sensorReadInterval = int.tryParse(_sensorReadIntervalController.text) ?? 2000;
 
-      // Crear el perfil
       final newProfile = UserProfile(
         name: name,
         lightsEnabled: _lightsEnabled,
@@ -97,6 +109,17 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
         sensorsEnabled: _sensorsEnabled,
         sensorReadInterval: sensorReadInterval,
       );
+
+      // ✅ DEBUG: Imprimir el perfil antes de guardar
+      debugPrint("📝 Guardando perfil:");
+      debugPrint("  Nombre: $name");
+      debugPrint("  Luces habilitadas: $_lightsEnabled");
+      debugPrint("  ON interval: $lightOnInterval ms");
+      debugPrint("  OFF interval: $lightOffInterval ms");
+      debugPrint("  Auto-off: $autoOffDuration s");
+      debugPrint("  Modo parpadeo: ${newProfile.isBlinkingMode}");
+      debugPrint("  Modo auto-off: ${newProfile.isAutoOffMode}");
+      debugPrint("  Modo manual: ${newProfile.allowManualLightControl}");
 
       final state = Provider.of<SmartHomeState>(context, listen: false);
       if (widget.profileIndex != null) {
@@ -141,7 +164,6 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                     if (value == null || value.isEmpty) {
                       return 'Por favor, introduce un nombre.';
                     }
-                    // Opcional: Validar si el nombre ya existe (excepto si se está editando)
                     final state = Provider.of<SmartHomeState>(context, listen: false);
                     bool nameExists = state.profiles.any((p) => p.name == value && state.profiles.indexOf(p) != widget.profileIndex);
                     if (nameExists) {
@@ -174,11 +196,13 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
                         child: Text("Modo de Operación:", style: Theme.of(context).textTheme.titleMedium),
                       ),
-                      // Radio Buttons para seleccionar el modo
-                       RadioListTile<bool>(
+                      
+                      // ✅ Control Manual
+                      RadioListTile<String>(
                         title: const Text('Control Manual'),
-                        value: false,
-                        groupValue: _isBlinking || _isAutoOff,
+                        subtitle: const Text('Encender/apagar manualmente'),
+                        value: 'manual',
+                        groupValue: _isBlinking ? 'blink' : (_isAutoOff ? 'autooff' : 'manual'),
                         onChanged: (val) {
                           setState(() {
                             _isBlinking = false;
@@ -189,22 +213,24 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                           });
                         },
                       ),
-                      RadioListTile<bool>(
+                      
+                      // ✅ Parpadeo
+                      RadioListTile<String>(
                         title: const Text('Parpadeo Automático'),
-                        value: true,
-                        groupValue: _isBlinking,
+                        subtitle: const Text('LED parpadeará continuamente'),
+                        value: 'blink',
+                        groupValue: _isBlinking ? 'blink' : (_isAutoOff ? 'autooff' : 'manual'),
                         onChanged: (val) {
                           setState(() {
                             _isBlinking = true;
                             _isAutoOff = false;
-                             _autoOffDurationController.text = '0'; // Desactiva auto-off
-                             // Poner valores por defecto si estaban en 0
+                            _autoOffDurationController.text = '0';
                             if (_lightOnIntervalController.text == '0') _lightOnIntervalController.text = '1000';
                             if (_lightOffIntervalController.text == '0') _lightOffIntervalController.text = '1000';
                           });
                         },
                       ),
-                       // Campos para Parpadeo
+                      
                       if (_isBlinking)
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
@@ -214,7 +240,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                                 child: _buildNumberInput(
                                   controller: _lightOnIntervalController,
                                   labelText: 'Encendido (ms)',
-                                  minValue: 100, // Mínimo 100ms
+                                  minValue: 100,
                                 ),
                               ),
                               const SizedBox(width: 10),
@@ -228,29 +254,31 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                             ],
                           ),
                         ),
-                      RadioListTile<bool>(
+                      
+                      // ✅ Auto-apagado
+                      RadioListTile<String>(
                         title: const Text('Apagado Automático'),
-                        value: true,
-                        groupValue: _isAutoOff,
+                        subtitle: const Text('Encenderá y se apagará después de X segundos'),
+                        value: 'autooff',
+                        groupValue: _isBlinking ? 'blink' : (_isAutoOff ? 'autooff' : 'manual'),
                         onChanged: (val) {
                           setState(() {
                             _isAutoOff = true;
                             _isBlinking = false;
-                            _lightOnIntervalController.text = '0'; // Desactiva parpadeo
+                            _lightOnIntervalController.text = '0';
                             _lightOffIntervalController.text = '0';
-                            // Poner valor por defecto si estaba en 0
-                            if (_autoOffDurationController.text == '0') _autoOffDurationController.text = '60'; // 60 segundos por defecto
+                            if (_autoOffDurationController.text == '0') _autoOffDurationController.text = '60';
                           });
                         },
                       ),
-                      // Campo para Apagado Automático
+                      
                       if (_isAutoOff)
                          Padding(
                            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
                            child: _buildNumberInput(
                             controller: _autoOffDurationController,
                             labelText: 'Apagar después de (segundos)',
-                            minValue: 1, // Mínimo 1 segundo
+                            minValue: 1,
                            ),
                          ),
                     ],
@@ -280,7 +308,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
                          child: _buildNumberInput(
                           controller: _sensorReadIntervalController,
                           labelText: 'Intervalo Lectura (ms)',
-                          minValue: 500, // Mínimo 500ms
+                          minValue: 500,
                          ),
                        ),
                     ],
@@ -294,7 +322,6 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     );
   }
 
-  // Widget helper para campos de texto numéricos
   Widget _buildNumberInput({
       required TextEditingController controller,
       required String labelText,
@@ -311,7 +338,6 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
       validator: (value) {
         if (value == null || value.isEmpty) {
-          // Permitir vacío si el modo no está activo
           if (labelText.contains('Encendido') || labelText.contains('Apagado')) {
              if (_isBlinking) return 'Valor requerido';
           } else if (labelText.contains('Apagar después')) {
@@ -319,7 +345,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
           } else if (labelText.contains('Intervalo Lectura')) {
              if (_sensorsEnabled) return 'Valor requerido';
           }
-          return null; // No requerido si el modo no está activo
+          return null;
         }
         final number = int.tryParse(value);
         if (number == null) {
@@ -330,16 +356,6 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
         }
         return null;
       },
-       onChanged: (value) {
-         // Actualizar modos al cambiar los valores de intervalo/duración
-         setState(() {
-            _updateLightModes(
-              int.tryParse(_lightOnIntervalController.text) ?? 0,
-              int.tryParse(_lightOffIntervalController.text) ?? 0,
-              int.tryParse(_autoOffDurationController.text) ?? 0,
-            );
-         });
-       },
     );
   }
 }
