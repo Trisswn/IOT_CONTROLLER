@@ -20,7 +20,7 @@ class BluetoothControlScreen extends StatefulWidget {
 }
 
 class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
-  // --- Variables Bluetooth (sin cambios) ---
+  // --- Variables Bluetooth ---
   BluetoothDevice? _targetDevice;
   BluetoothCharacteristic? _ledCharacteristic;
   BluetoothCharacteristic? _sensorCharacteristic;
@@ -49,12 +49,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
   // Helper para acceder al estado
   SmartHomeState get state => Provider.of<SmartHomeState>(context, listen: false);
 
-  // --- Lógica Bluetooth (sin cambios funcionales) ---
-  // Se mantienen las funciones:
-  // _startScan, _stopScan, _connectToDevice, _disconnectFromDevice,
-  // _discoverServices, _writeToLedCharacteristic, _sendProfileToDevice,
-  // _showErrorDialog
-
+  // --- Lógica Bluetooth ---
   void _startScan() {
     if (_isScanning) return;
     setState(() => _isScanning = true);
@@ -198,17 +193,19 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
                       try {
                         String data = String.fromCharCodes(value);
                         List<String> parts = data.split(',');
-                        if (parts.length == 3) {
+                        // MODIFICADO: Esperar solo 2 valores (Temp, Hum)
+                        if (parts.length == 2) {
                           double temp = double.tryParse(parts[0]) ?? double.nan;
                           double hum = double.tryParse(parts[1]) ?? double.nan;
-                          double light = double.tryParse(parts[2]) ?? double.nan;
+                          // ELIMINADO: double light = double.tryParse(parts[2]) ?? double.nan;
                           if (mounted) {
-                            state.updateSensorReadings(temp, hum, light);
+                            // MODIFICADO: Pasar solo temp y hum
+                            state.updateSensorReadings(temp, hum);
                           }
-                        } else { debugPrint("Datos sensor formato incorrecto: $data"); }
+                        } else { debugPrint("Datos sensor formato incorrecto: $data (Esperaba 2 valores)"); } // Mensaje ajustado
                       } catch (e) { debugPrint("Error al parsear datos del sensor: $e"); }
                     } else {
-                       if (mounted) { state.updateSensorReadings(double.nan, double.nan, double.nan); }
+                       if (mounted) { state.updateSensorReadings(double.nan, double.nan); } // Pasar NaN si están deshabilitados
                     }
                   }, onError: (e) { debugPrint("Error en sensor stream: $e"); });
                    debugPrint("Suscripción a notificaciones Sensor activada.");
@@ -344,21 +341,19 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
             children: <Widget>[
               _buildStatusCard(homeState), // Tarjeta de estado
 
-              // --- SECCIÓN CONTROLES REINCORPORADA ---
+              // --- SECCIÓN CONTROLES ---
               const SizedBox(height: 24),
               Text("Controles", style: textTheme.titleLarge),
               const SizedBox(height: 12),
-              // Usamos GridView aunque solo haya un control, para facilitar añadir más en el futuro
               GridView.count(
-                crossAxisCount: 2, // Mantenemos 2 columnas
+                crossAxisCount: 2,
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 crossAxisSpacing: 16,
                 mainAxisSpacing: 16,
-                childAspectRatio: 1.0, // Tarjetas cuadradas
+                childAspectRatio: 1.0,
                 children: [
-                  _buildLightControlCard(homeState), // <<< AQUÍ ESTÁ EL CONTROL DEL LED
-                  // Puedes añadir más tarjetas aquí si quieres
+                  _buildLightControlCard(homeState), // Control del LED
                 ],
               ),
               // --- FIN SECCIÓN CONTROLES ---
@@ -367,7 +362,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
               Text("Sensores Ambientales", style: textTheme.titleLarge),
               const SizedBox(height: 12),
 
-              // --- DISEÑO SENSORES EN FILA (SIN LUZ) ---
+              // --- DISEÑO SENSORES EN FILA ---
               if (homeState.isConnected && (homeState.activeProfile?.sensorsEnabled ?? true))
                 Container(
                   padding: const EdgeInsets.symmetric(vertical: 16.0),
@@ -388,7 +383,6 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
                       // Solo incluimos Temperatura y Humedad
                       Expanded(child: _buildSensorGauge("Temperatura", homeState.temperature, "°C", 0, 50, AppColors.sensorTemp)),
                       Expanded(child: _buildSensorGauge("Humedad", homeState.humidity, "%", 0, 100, AppColors.sensorHumid)),
-                      // ELIMINADO: Expanded(child: _buildSensorGauge("Luz", homeState.lightLevel, "lx", 0, 4095, AppColors.sensorLight)),
                     ],
                   ),
                 )
@@ -403,7 +397,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
 
   // --- Widgets Auxiliares ---
 
-  // Tarjeta de Estado y Conexión (sin cambios)
+  // Tarjeta de Estado y Conexión
   Widget _buildStatusCard(SmartHomeState homeState) {
      return Card(
       child: Padding(
@@ -469,7 +463,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     );
   }
 
-  // --- WIDGET CONTROL LUZ REINCORPORADO (CON ESTILO ACTUALIZADO) ---
+  // Widget Control Luz
   Widget _buildLightControlCard(SmartHomeState homeState) {
     bool isConnected = homeState.isConnected;
     UserProfile? activeProfile = homeState.activeProfile;
@@ -494,21 +488,19 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
       iconData = Icons.lightbulb_outline;
       statusText = "Deshab. (Perfil)";
     } else if (isBlinking) {
-      bgColor = AppColors.sensorHumid.withOpacity(0.1); // Usamos un color distintivo para parpadeo
+      bgColor = AppColors.sensorHumid.withOpacity(0.1);
       contentColor = AppColors.sensorHumid;
-      iconData = Icons.wb_incandescent_outlined; // Icono diferente para parpadeo
+      iconData = Icons.wb_incandescent_outlined;
       statusText = "Parpadeo (Perfil)";
     } else if (isOn) {
-      // ESTADO ENCENDIDO
-      bgColor = AppColors.primary; // Fondo con color primario
-      contentColor = AppColors.textOnPrimary; // Texto/Icono blanco
-      iconData = Icons.lightbulb; // Icono relleno
+      bgColor = AppColors.primary;
+      contentColor = AppColors.textOnPrimary;
+      iconData = Icons.lightbulb;
       statusText = "Encendida";
     } else {
-      // ESTADO APAGADO
-      bgColor = AppColors.card; // Fondo blanco/tarjeta
-      contentColor = AppColors.textPrimary; // Texto/Icono oscuro
-      iconData = Icons.lightbulb_outline; // Icono contorno
+      bgColor = AppColors.card;
+      contentColor = AppColors.textPrimary;
+      iconData = Icons.lightbulb_outline;
       statusText = "Apagada";
     }
 
@@ -536,7 +528,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
               Icon(iconData, size: 40, color: contentColor),
               const SizedBox(height: 12),
               Text(
-                "LED", // Cambiado de "Luz" a "LED"
+                "LED",
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(color: contentColor),
                 textAlign: TextAlign.center,
               ),
@@ -552,10 +544,8 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
       ),
     );
  }
- // --- FIN WIDGET CONTROL LUZ ---
 
-
-  // Widget Sensor Gauge (sin Card)
+  // Widget Sensor Gauge
   Widget _buildSensorGauge(String title, double value, String unit, double min, double max, Color color) {
      bool isInvalid = value.isNaN;
      double displayValue = isInvalid ? min : value.clamp(min, max);
@@ -586,7 +576,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
                   GaugeAnnotation(
                     positionFactor: 0.5, angle: 90,
                     widget: Text(
-                      isInvalid ? "--" : value.toStringAsFixed(title == "Luz" ? 0 : 1),
+                      isInvalid ? "--" : value.toStringAsFixed(1), // Formato a 1 decimal
                       style: TextStyle( fontSize: 16, fontWeight: FontWeight.bold, color: isInvalid ? AppColors.textSecondary : color, ),
                     ),
                   ),
@@ -603,7 +593,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     );
   }
 
- // Placeholder Sensores (Sin cambios)
+ // Placeholder Sensores
   Widget _buildSensorPlaceholder(bool isConnected, bool sensorsEnabledByProfile) {
      String message; IconData icon; Color color = AppColors.textSecondary;
      if (!isConnected) { message = "Conecta el dispositivo para ver los sensores."; icon = Icons.bluetooth_disabled; }
