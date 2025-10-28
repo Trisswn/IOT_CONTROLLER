@@ -4,6 +4,10 @@ import 'package:provider/provider.dart';
 import 'smart_home_state.dart';
 import 'profile_model.dart';
 import 'package:flutter/services.dart';
+import 'app_colors.dart'; // <<< Importar colores
+
+// Enum para los modos de luz
+enum LightMode { manual, blink, autoOff }
 
 class ProfileEditScreen extends StatefulWidget {
   final int? profileIndex;
@@ -24,8 +28,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
   late bool _sensorsEnabled;
   late TextEditingController _sensorReadIntervalController;
 
-  bool _isBlinking = false;
-  bool _isAutoOff = false;
+  late LightMode _selectedLightMode; // Usaremos un enum para el modo
 
   @override
   void initState() {
@@ -36,7 +39,14 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     if (widget.profileIndex != null) {
       profile = state.profiles[widget.profileIndex!];
     } else {
-      profile = UserProfile(name: '');
+      // Valores por defecto para un nuevo perfil
+      profile = UserProfile(
+          name: '',
+          lightOnInterval: 0, // Manual por defecto
+          lightOffInterval: 0,
+          autoOffDuration: 0,
+          sensorReadInterval: 2000 // Intervalo de sensor por defecto
+      );
     }
 
     _nameController = TextEditingController(text: profile.name);
@@ -47,19 +57,14 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     _sensorsEnabled = profile.sensorsEnabled;
     _sensorReadIntervalController = TextEditingController(text: profile.sensorReadInterval.toString());
 
-    _updateLightModes(profile.lightOnInterval, profile.lightOffInterval, profile.autoOffDuration);
-  }
-
-  void _updateLightModes(int onInterval, int offInterval, int autoOff) {
-     _isBlinking = onInterval > 0 && offInterval > 0;
-     _isAutoOff = autoOff > 0 && !_isBlinking;
-     if (_isBlinking) {
-       _autoOffDurationController.text = '0';
-     }
-     if (_isAutoOff) {
-       _lightOnIntervalController.text = '0';
-       _lightOffIntervalController.text = '0';
-     }
+    // Determinar el modo de luz inicial
+    if (profile.isBlinkingMode) {
+      _selectedLightMode = LightMode.blink;
+    } else if (profile.isAutoOffMode) {
+      _selectedLightMode = LightMode.autoOff;
+    } else {
+      _selectedLightMode = LightMode.manual;
+    }
   }
 
   @override
@@ -77,28 +82,34 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
       _formKey.currentState!.save();
 
       final name = _nameController.text;
-      
-      // ✅ CORRECCIÓN CRÍTICA: Asegurar que los valores sean 0 cuando no están en uso
+
       int lightOnInterval = 0;
       int lightOffInterval = 0;
       int autoOffDuration = 0;
-      
+      int sensorReadInterval = 2000; // Valor por defecto
+
       if (_lightsEnabled) {
-        if (_isBlinking) {
-          // Solo parpadeo
-          lightOnInterval = int.tryParse(_lightOnIntervalController.text) ?? 0;
-          lightOffInterval = int.tryParse(_lightOffIntervalController.text) ?? 0;
-          autoOffDuration = 0; // ⭐ Importante: asegurar que sea 0
-        } else if (_isAutoOff) {
-          // Solo auto-apagado
-          lightOnInterval = 0; // ⭐ Importante: asegurar que sea 0
-          lightOffInterval = 0; // ⭐ Importante: asegurar que sea 0
-          autoOffDuration = int.tryParse(_autoOffDurationController.text) ?? 0;
+        switch (_selectedLightMode) {
+          case LightMode.blink:
+            lightOnInterval = int.tryParse(_lightOnIntervalController.text) ?? 1000;
+            lightOffInterval = int.tryParse(_lightOffIntervalController.text) ?? 1000;
+            autoOffDuration = 0; // Asegura que autoOff sea 0 en modo parpadeo
+            break;
+          case LightMode.autoOff:
+            autoOffDuration = int.tryParse(_autoOffDurationController.text) ?? 60;
+            lightOnInterval = 0; // Asegura que los intervalos sean 0
+            lightOffInterval = 0;
+            break;
+          case LightMode.manual:
+            // Todos los intervalos ya son 0 por defecto
+            break;
         }
-        // Si no es ninguno, todos quedan en 0 (control manual)
       }
-      
-      final sensorReadInterval = int.tryParse(_sensorReadIntervalController.text) ?? 2000;
+
+       if (_sensorsEnabled) {
+         sensorReadInterval = int.tryParse(_sensorReadIntervalController.text) ?? 2000;
+       }
+
 
       final newProfile = UserProfile(
         name: name,
@@ -110,17 +121,6 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
         sensorReadInterval: sensorReadInterval,
       );
 
-      // ✅ DEBUG: Imprimir el perfil antes de guardar
-      debugPrint("📝 Guardando perfil:");
-      debugPrint("  Nombre: $name");
-      debugPrint("  Luces habilitadas: $_lightsEnabled");
-      debugPrint("  ON interval: $lightOnInterval ms");
-      debugPrint("  OFF interval: $lightOffInterval ms");
-      debugPrint("  Auto-off: $autoOffDuration s");
-      debugPrint("  Modo parpadeo: ${newProfile.isBlinkingMode}");
-      debugPrint("  Modo auto-off: ${newProfile.isAutoOffMode}");
-      debugPrint("  Modo manual: ${newProfile.allowManualLightControl}");
-
       final state = Provider.of<SmartHomeState>(context, listen: false);
       if (widget.profileIndex != null) {
         state.updateProfile(widget.profileIndex!, newProfile);
@@ -131,14 +131,30 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     }
   }
 
+  // Helper para construir secciones dentro de las tarjetas
+  Widget _buildSectionHeader(String title, IconData icon) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 16.0, right: 16.0, top: 16.0, bottom: 8.0),
+      child: Row(
+        children: [
+          Icon(icon, color: AppColors.primary),
+          const SizedBox(width: 12),
+          Text(title, style: Theme.of(context).textTheme.titleMedium),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.profileIndex == null ? 'Nuevo Perfil' : 'Editar Perfil'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.save),
+            icon: const Icon(Icons.save_outlined), // Icono actualizado
             tooltip: "Guardar Perfil",
             onPressed: _saveForm,
           ),
@@ -149,23 +165,30 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16.0),
           children: [
-            // --- Tarjeta de Información General ---
+            // --- Tarjeta Nombre ---
             Card(
-              elevation: 2,
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: TextFormField(
                   controller: _nameController,
                   decoration: const InputDecoration(
                     labelText: 'Nombre del Perfil',
-                    icon: Icon(Icons.label),
+                    icon: Icon(Icons.label_outline, color: AppColors.primary),
+                     border: OutlineInputBorder(), // Estilo de borde
+                     filled: true, // Fondo relleno
+                     fillColor: AppColors.background, // Color de fondo sutil
                   ),
                   validator: (value) {
                     if (value == null || value.isEmpty) {
                       return 'Por favor, introduce un nombre.';
                     }
                     final state = Provider.of<SmartHomeState>(context, listen: false);
-                    bool nameExists = state.profiles.any((p) => p.name == value && state.profiles.indexOf(p) != widget.profileIndex);
+                    // Comprueba si el nombre ya existe en OTRO perfil
+                    bool nameExists = state.profiles.asMap().entries.any((entry) {
+                       int idx = entry.key;
+                       UserProfile p = entry.value;
+                       return p.name == value && idx != widget.profileIndex;
+                    });
                     if (nameExists) {
                       return 'Este nombre de perfil ya existe.';
                     }
@@ -176,144 +199,152 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
             ),
             const SizedBox(height: 20),
 
-            // --- Tarjeta de Configuración de Luces ---
+            // --- Tarjeta Configuración LED ---
             Card(
-              elevation: 2,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SwitchListTile(
-                      title: const Text('Gestión de Luces'),
-                      value: _lightsEnabled,
-                      secondary: const Icon(Icons.lightbulb_outline),
-                      onChanged: (val) => setState(() => _lightsEnabled = val),
-                    ),
-                    if (_lightsEnabled) ...[
-                      const Divider(),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                        child: Text("Modo de Operación:", style: Theme.of(context).textTheme.titleMedium),
-                      ),
-                      
-                      // ✅ Control Manual
-                      RadioListTile<String>(
-                        title: const Text('Control Manual'),
-                        subtitle: const Text('Encender/apagar manualmente'),
-                        value: 'manual',
-                        groupValue: _isBlinking ? 'blink' : (_isAutoOff ? 'autooff' : 'manual'),
-                        onChanged: (val) {
-                          setState(() {
-                            _isBlinking = false;
-                            _isAutoOff = false;
-                            _lightOnIntervalController.text = '0';
-                            _lightOffIntervalController.text = '0';
-                            _autoOffDurationController.text = '0';
-                          });
-                        },
-                      ),
-                      
-                      // ✅ Parpadeo
-                      RadioListTile<String>(
-                        title: const Text('Parpadeo Automático'),
-                        subtitle: const Text('LED parpadeará continuamente'),
-                        value: 'blink',
-                        groupValue: _isBlinking ? 'blink' : (_isAutoOff ? 'autooff' : 'manual'),
-                        onChanged: (val) {
-                          setState(() {
-                            _isBlinking = true;
-                            _isAutoOff = false;
-                            _autoOffDurationController.text = '0';
-                            if (_lightOnIntervalController.text == '0') _lightOnIntervalController.text = '1000';
-                            if (_lightOffIntervalController.text == '0') _lightOffIntervalController.text = '1000';
-                          });
-                        },
-                      ),
-                      
-                      if (_isBlinking)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: _buildNumberInput(
-                                  controller: _lightOnIntervalController,
-                                  labelText: 'Encendido (ms)',
-                                  minValue: 100,
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: _buildNumberInput(
-                                  controller: _lightOffIntervalController,
-                                  labelText: 'Apagado (ms)',
-                                  minValue: 100,
-                                ),
-                              ),
-                            ],
-                          ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildSectionHeader('Configuración LED', Icons.lightbulb_outline),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Habilitar control LED', style: textTheme.bodyLarge),
+                        Switch(
+                          value: _lightsEnabled,
+                          onChanged: (val) => setState(() => _lightsEnabled = val),
+                          activeColor: AppColors.primary,
                         ),
-                      
-                      // ✅ Auto-apagado
-                      RadioListTile<String>(
-                        title: const Text('Apagado Automático'),
-                        subtitle: const Text('Encenderá y se apagará después de X segundos'),
-                        value: 'autooff',
-                        groupValue: _isBlinking ? 'blink' : (_isAutoOff ? 'autooff' : 'manual'),
-                        onChanged: (val) {
+                      ],
+                    ),
+                  ),
+                  // Mostrar opciones solo si el LED está habilitado
+                  if (_lightsEnabled) ...[
+                    const Divider(height: 20, indent: 16, endIndent: 16),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                      child: Text("Modo de Operación:", style: textTheme.titleSmall?.copyWith(color: AppColors.textSecondary)),
+                    ),
+                    // Usamos SegmentedButton para seleccionar el modo
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                      child: SegmentedButton<LightMode>(
+                        segments: const <ButtonSegment<LightMode>>[
+                          ButtonSegment<LightMode>(value: LightMode.manual, label: Text('Manual'), icon: Icon(Icons.touch_app_outlined)),
+                          ButtonSegment<LightMode>(value: LightMode.blink, label: Text('Parpadeo'), icon: Icon(Icons.wb_incandescent_outlined)),
+                          ButtonSegment<LightMode>(value: LightMode.autoOff, label: Text('Auto Off'), icon: Icon(Icons.timer_outlined)),
+                        ],
+                        selected: {_selectedLightMode},
+                        onSelectionChanged: (Set<LightMode> newSelection) {
                           setState(() {
-                            _isAutoOff = true;
-                            _isBlinking = false;
-                            _lightOnIntervalController.text = '0';
-                            _lightOffIntervalController.text = '0';
-                            if (_autoOffDurationController.text == '0') _autoOffDurationController.text = '60';
+                            _selectedLightMode = newSelection.first;
+                            // Ajustar valores por defecto al cambiar modo
+                            if (_selectedLightMode == LightMode.blink) {
+                               if (_lightOnIntervalController.text == '0') _lightOnIntervalController.text = '1000';
+                               if (_lightOffIntervalController.text == '0') _lightOffIntervalController.text = '1000';
+                               _autoOffDurationController.text = '0'; // Asegura que auto-off sea 0
+                            } else if (_selectedLightMode == LightMode.autoOff) {
+                               if (_autoOffDurationController.text == '0') _autoOffDurationController.text = '60';
+                               _lightOnIntervalController.text = '0'; // Asegura que parpadeo sea 0
+                               _lightOffIntervalController.text = '0';
+                            } else { // Manual
+                               _lightOnIntervalController.text = '0';
+                               _lightOffIntervalController.text = '0';
+                               _autoOffDurationController.text = '0';
+                            }
                           });
                         },
+                        style: SegmentedButton.styleFrom(
+                           selectedBackgroundColor: AppColors.primary.withOpacity(0.2),
+                           selectedForegroundColor: AppColors.primaryDark,
+                        ),
                       ),
-                      
-                      if (_isAutoOff)
-                         Padding(
-                           padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                           child: _buildNumberInput(
-                            controller: _autoOffDurationController,
-                            labelText: 'Apagar después de (segundos)',
-                            minValue: 1,
-                           ),
-                         ),
-                    ],
+                    ),
+                    // Campos condicionales según el modo seleccionado
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 300),
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                      child: Column(
+                        children: [
+                          if (_selectedLightMode == LightMode.blink)
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _buildNumberInput(
+                                    controller: _lightOnIntervalController,
+                                    labelText: 'Encendido (ms)',
+                                    icon: Icons.timer,
+                                    minValue: 50, // Mínimo razonable
+                                    enabled: _lightsEnabled,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: _buildNumberInput(
+                                    controller: _lightOffIntervalController,
+                                    labelText: 'Apagado (ms)',
+                                    icon: Icons.timer_off_outlined,
+                                    minValue: 50,
+                                    enabled: _lightsEnabled,
+                                  ),
+                                ),
+                              ],
+                            ),
+                           if (_selectedLightMode == LightMode.autoOff)
+                             _buildNumberInput(
+                              controller: _autoOffDurationController,
+                              labelText: 'Apagar después de (segundos)',
+                              icon: Icons.hourglass_bottom,
+                              minValue: 1,
+                              enabled: _lightsEnabled,
+                             ),
+                        ],
+                      ),
+                    ),
                   ],
-                ),
+                  const SizedBox(height: 8), // Espacio al final de la tarjeta
+                ],
               ),
             ),
             const SizedBox(height: 20),
 
-            // --- Tarjeta de Configuración de Sensores ---
+            // --- Tarjeta Configuración Sensores ---
             Card(
-              elevation: 2,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8.0),
-                child: Column(
-                  children: [
-                    SwitchListTile(
-                      title: const Text('Monitoreo de Sensores'),
-                      value: _sensorsEnabled,
-                      secondary: const Icon(Icons.sensors),
-                      onChanged: (val) => setState(() => _sensorsEnabled = val),
+              child: Column(
+                children: [
+                   _buildSectionHeader('Monitoreo Sensores', Icons.sensors),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('Habilitar lectura sensores', style: textTheme.bodyLarge),
+                          Switch(
+                            value: _sensorsEnabled,
+                            onChanged: (val) => setState(() => _sensorsEnabled = val),
+                             activeColor: AppColors.primary,
+                          ),
+                        ],
+                      ),
                     ),
-                    if (_sensorsEnabled) ...[
-                       const Divider(),
-                       Padding(
-                         padding: const EdgeInsets.all(16.0),
-                         child: _buildNumberInput(
-                          controller: _sensorReadIntervalController,
-                          labelText: 'Intervalo Lectura (ms)',
-                          minValue: 500,
-                         ),
-                       ),
-                    ],
-                  ],
-                ),
+                   // Campo de intervalo visible solo si los sensores están habilitados
+                   AnimatedContainer(
+                      duration: const Duration(milliseconds: 300),
+                      padding: EdgeInsets.fromLTRB(16.0, _sensorsEnabled ? 16.0 : 0.0, 16.0, _sensorsEnabled ? 16.0 : 0.0),
+                      constraints: BoxConstraints(maxHeight: _sensorsEnabled ? 100 : 0), // Anima la altura
+                      child: Opacity( // Anima la opacidad
+                          opacity: _sensorsEnabled ? 1.0 : 0.0,
+                          child: _buildNumberInput(
+                            controller: _sensorReadIntervalController,
+                            labelText: 'Intervalo Lectura (ms)',
+                            icon: Icons.speed_outlined,
+                            minValue: 500, // Mínimo razonable
+                            enabled: _sensorsEnabled,
+                          ),
+                      ),
+                    ),
+                ],
               ),
             ),
           ],
@@ -322,30 +353,42 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
     );
   }
 
+  // Widget de input numérico reutilizable con mejor estilo
   Widget _buildNumberInput({
       required TextEditingController controller,
       required String labelText,
-      int minValue = 0
+      required IconData icon,
+      int minValue = 0,
+      bool enabled = true,
   }) {
     return TextFormField(
       controller: controller,
       decoration: InputDecoration(
           labelText: labelText,
+          icon: Icon(icon, color: enabled ? AppColors.textSecondary : Colors.grey.shade400),
           suffixText: labelText.contains('(ms)') ? 'ms' : (labelText.contains('(segundos)') ? 's' : ''),
           border: const OutlineInputBorder(),
+          filled: true,
+          fillColor: enabled ? AppColors.background : Colors.grey.shade200, // Fondo diferente si está deshabilitado
       ),
       keyboardType: TextInputType.number,
       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+      enabled: enabled, // Habilita/deshabilita el campo
       validator: (value) {
+        // Solo valida si el campo está habilitado
+        if (!enabled) return null;
+
         if (value == null || value.isEmpty) {
-          if (labelText.contains('Encendido') || labelText.contains('Apagado')) {
-             if (_isBlinking) return 'Valor requerido';
-          } else if (labelText.contains('Apagar después')) {
-             if (_isAutoOff) return 'Valor requerido';
-          } else if (labelText.contains('Intervalo Lectura')) {
-             if (_sensorsEnabled) return 'Valor requerido';
-          }
-          return null;
+          // Requiere valor solo si el modo correspondiente está activo
+           bool required = false;
+           if (labelText.contains('Encendido') || labelText.contains('Apagado')) {
+             required = (_selectedLightMode == LightMode.blink);
+           } else if (labelText.contains('Apagar después')) {
+             required = (_selectedLightMode == LightMode.autoOff);
+           } else if (labelText.contains('Intervalo Lectura')) {
+             required = _sensorsEnabled;
+           }
+           return required ? 'Valor requerido' : null;
         }
         final number = int.tryParse(value);
         if (number == null) {
@@ -356,6 +399,7 @@ class _ProfileEditScreenState extends State<ProfileEditScreen> {
         }
         return null;
       },
+       onChanged: (_) => _formKey.currentState?.validate(), // Revalida al cambiar
     );
   }
 }

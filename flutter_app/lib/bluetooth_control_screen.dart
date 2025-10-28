@@ -10,10 +10,7 @@ import 'smart_home_state.dart';
 import 'main.dart'; // Asegúrate de que los UUIDs globales estén aquí
 import 'profile_model.dart'; // Importa el modelo de perfil
 import 'profiles_screen.dart'; // Importa la pantalla de perfiles
-
-// Asegúrate que este UUID coincida EXÁCTAMENTE con el del ESP32
-// Lo movimos a main.dart, pero lo dejamos aquí comentado por referencia si fuera necesario
-// final Guid PROFILE_CONFIG_UUID = Guid("c1d2e3f4-a5b6-c7d8-e9f0-a1b2c3d4e5f6");
+import 'app_colors.dart'; // Importar nuestros colores
 
 class BluetoothControlScreen extends StatefulWidget {
   const BluetoothControlScreen({super.key});
@@ -23,16 +20,16 @@ class BluetoothControlScreen extends StatefulWidget {
 }
 
 class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
-
+  // --- Variables Bluetooth (sin cambios) ---
   BluetoothDevice? _targetDevice;
   BluetoothCharacteristic? _ledCharacteristic;
   BluetoothCharacteristic? _sensorCharacteristic;
-  BluetoothCharacteristic? _profileConfigCharacteristic; // Característica para perfiles
+  BluetoothCharacteristic? _profileConfigCharacteristic;
 
   StreamSubscription<List<ScanResult>>? _scanSubscription;
   StreamSubscription<BluetoothConnectionState>? _connectionStateSubscription;
   StreamSubscription<List<int>>? _sensorDataSubscription;
-  StreamSubscription<List<int>>? _ledStateSubscription; // <<< NUEVO: Listener para el estado del LED
+  StreamSubscription<List<int>>? _ledStateSubscription;
   bool _isScanning = false;
 
   @override
@@ -40,7 +37,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     _scanSubscription?.cancel();
     _connectionStateSubscription?.cancel();
     _sensorDataSubscription?.cancel();
-    _ledStateSubscription?.cancel(); // <<< NUEVO: Cancelar listener del LED
+    _ledStateSubscription?.cancel();
     try {
      _targetDevice?.disconnect();
     } catch (e) {
@@ -52,7 +49,11 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
   // Helper para acceder al estado
   SmartHomeState get state => Provider.of<SmartHomeState>(context, listen: false);
 
-  // --- Lógica Bluetooth ---
+  // --- Lógica Bluetooth (sin cambios funcionales) ---
+  // Se mantienen las funciones:
+  // _startScan, _stopScan, _connectToDevice, _disconnectFromDevice,
+  // _discoverServices, _writeToLedCharacteristic, _sendProfileToDevice,
+  // _showErrorDialog
 
   void _startScan() {
     if (_isScanning) return;
@@ -118,8 +119,8 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
         _profileConfigCharacteristic = null;
         _sensorDataSubscription?.cancel();
         _sensorDataSubscription = null;
-        _ledStateSubscription?.cancel(); // <<< NUEVO: Cancelar al desconectar
-        _ledStateSubscription = null;   // <<< NUEVO: Poner a null
+        _ledStateSubscription?.cancel();
+        _ledStateSubscription = null;
       }
     }, onError: (e) {
        debugPrint("Error en connection state listener: $e");
@@ -142,14 +143,13 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
   void _disconnectFromDevice() {
     _sensorDataSubscription?.cancel();
     _sensorDataSubscription = null;
-    _ledStateSubscription?.cancel(); // <<< NUEVO: Cancelar al desconectar manualmente
-    _ledStateSubscription = null;   // <<< NUEVO: Poner a null
+    _ledStateSubscription?.cancel();
+    _ledStateSubscription = null;
     _connectionStateSubscription?.cancel();
     _targetDevice?.disconnect();
      state.setStatusMessage("Desconectando...");
   }
 
-  // --- _discoverServices (MODIFICADO) ---
   Future<void> _discoverServices() async {
     if (_targetDevice == null || !state.isConnected) return;
     state.setStatusMessage("Descubriendo servicios...");
@@ -157,7 +157,6 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
       List<BluetoothService> services = await _targetDevice!.discoverServices();
       bool foundLed = false; bool foundSensor = false; bool foundProfile = false;
 
-      // Limpiar listeners anteriores por si acaso (reconexión)
       _ledStateSubscription?.cancel();
       _ledStateSubscription = null;
       _sensorDataSubscription?.cancel();
@@ -167,21 +166,16 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
         if (service.uuid == SERVICE_UUID) {
           debugPrint("Servicio principal encontrado.");
           for (var characteristic in service.characteristics) {
-            // Característica LED
             if (characteristic.uuid == LED_CHARACTERISTIC_UUID) {
                _ledCharacteristic = characteristic; foundLed = true; debugPrint("Característica LED encontrada.");
-              // --- INICIO MODIFICACIÓN LED ---
               try {
-                // Habilitar notificaciones para el LED
                 await _ledCharacteristic!.setNotifyValue(true);
-                // Escuchar cambios de estado notificados por el ESP32
                 _ledStateSubscription = _ledCharacteristic!.lastValueStream.listen((value) {
                   if (value.isNotEmpty) {
                     String ledStateStr = String.fromCharCodes(value);
                     bool actualLedState = (ledStateStr == "1");
                     debugPrint("<<< Notificación LED recibida: ${actualLedState ? 'ON' : 'OFF'}");
-                    // Actualiza el estado de la app con el valor REAL del ESP32
-                    if (mounted) { // Asegurarse que el widget aún existe
+                    if (mounted) {
                         state.setLedState(actualLedState);
                     }
                   }
@@ -189,22 +183,16 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
                   debugPrint("Error en LED stream: $e");
                 });
                 debugPrint("Suscripción a notificaciones LED activada.");
-
               } catch (e) {
                  debugPrint("Error al configurar notificaciones LED: $e");
                  _showErrorDialog("Error", "No se pudieron activar las notificaciones para el LED: ${e.toString()}");
-                 // Considera si desconectar o solo mostrar error
               }
-              // --- FIN MODIFICACIÓN LED ---
             }
-
-            // Característica Sensor
             if (characteristic.uuid == SENSOR_CHARACTERISTIC_UUID) {
               _sensorCharacteristic = characteristic; foundSensor = true; debugPrint("Característica Sensor encontrada.");
               try {
                   await _sensorCharacteristic!.setNotifyValue(true);
                   _sensorDataSubscription = _sensorCharacteristic!.lastValueStream.listen((value) {
-                    // Solo procesar si el perfil permite sensores (o no hay perfil)
                     if (state.activeProfile?.sensorsEnabled ?? true) {
                       if (value.isEmpty) return;
                       try {
@@ -213,61 +201,37 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
                         if (parts.length == 3) {
                           double temp = double.tryParse(parts[0]) ?? double.nan;
                           double hum = double.tryParse(parts[1]) ?? double.nan;
-                          // Corrección: El valor de luz es entero
                           double light = double.tryParse(parts[2]) ?? double.nan;
                           if (mounted) {
                             state.updateSensorReadings(temp, hum, light);
                           }
-                        } else {
-                          debugPrint("Datos sensor formato incorrecto: $data");
-                        }
-                      } catch (e) {
-                        debugPrint("Error al parsear datos del sensor: $e");
-                      }
+                        } else { debugPrint("Datos sensor formato incorrecto: $data"); }
+                      } catch (e) { debugPrint("Error al parsear datos del sensor: $e"); }
                     } else {
-                      // Si los sensores están deshabilitados por perfil, mostrar NaN o 0
-                       if (mounted) {
-                         state.updateSensorReadings(double.nan, double.nan, double.nan);
-                       }
+                       if (mounted) { state.updateSensorReadings(double.nan, double.nan, double.nan); }
                     }
-                  }, onError: (e) {
-                    debugPrint("Error en sensor stream: $e");
-                  });
+                  }, onError: (e) { debugPrint("Error en sensor stream: $e"); });
                    debugPrint("Suscripción a notificaciones Sensor activada.");
               } catch(e) {
                   debugPrint("Error al configurar notificaciones Sensor: $e");
                   _showErrorDialog("Error", "No se pudieron activar las notificaciones para el Sensor: ${e.toString()}");
               }
             }
-
-            // Característica Perfil
             if (characteristic.uuid == PROFILE_CONFIG_UUID) {
               _profileConfigCharacteristic = characteristic; foundProfile = true; debugPrint("Característica de Perfil encontrada!");
             }
           }
-           break; // Salir del bucle de servicios una vez encontrado el principal
+           break;
         }
-      } // Fin for services
+      }
 
-      // Verificar si se encontraron todas
       if (foundLed && foundSensor && foundProfile) {
         state.setStatusMessage("¡Dispositivo listo!");
-        // Enviar perfil activo si existe (después de configurar listeners)
         if (state.activeProfile != null) {
           debugPrint("Enviando perfil activo al conectar...");
           await _sendProfileToDevice(state.activeProfile!);
         }
-        // (Opcional) Leer estado inicial LED aquí si no se confía en la primera notificación
-        // try {
-        //   var initialValue = await _ledCharacteristic?.read();
-        //   if (initialValue != null && initialValue.isNotEmpty) {
-        //       state.setLedState(String.fromCharCodes(initialValue) == "1");
-        //       debugPrint("Estado inicial del LED leído: ${state.ledIsOn ? 'ON' : 'OFF'}");
-        //   }
-        // } catch (e) { debugPrint("Error leyendo estado inicial LED: $e"); }
-
       } else {
-        // Manejo de error si falta alguna característica
         String missing = "";
         if (!foundLed) missing += " LED,";
         if (!foundSensor) missing += " Sensor,";
@@ -285,13 +249,10 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     }
   }
 
-  // --- _writeToLedCharacteristic (MODIFICADO - Opcional sin actualización optimista) ---
   Future<void> _writeToLedCharacteristic(String value) async {
-    UserProfile? activeProfile = state.activeProfile; // Obtener perfil actual
-    bool lightsFeatureEnabled = activeProfile?.lightsEnabled ?? true; // Habilitado si no hay perfil
+    UserProfile? activeProfile = state.activeProfile;
+    bool lightsFeatureEnabled = activeProfile?.lightsEnabled ?? true;
     bool isBlinking = activeProfile?.isBlinkingMode ?? false;
-
-    // Permitir escritura si luces habilitadas Y NO está en modo parpadeo
     bool allowWrite = lightsFeatureEnabled && !isBlinking;
 
     if (!allowWrite) {
@@ -299,11 +260,9 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
        if (!lightsFeatureEnabled) message = 'Control de luces deshabilitado por el perfil.';
        else if (isBlinking) message = 'Modo parpadeo activo (Perfil). Control manual bloqueado.';
        if (message.isNotEmpty && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(message), duration: const Duration(seconds: 2))
-          );
+          ScaffoldMessenger.of(context).showSnackBar( SnackBar(content: Text(message), duration: const Duration(seconds: 2)) );
        }
-      return; // No hacer nada si no está permitido
+      return;
     }
 
     if (_ledCharacteristic == null) {
@@ -311,20 +270,17 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
       return;
     }
     try {
-      debugPrint("--> Enviando comando LED: $value"); // Debug print
+      debugPrint("--> Enviando comando LED: $value");
       await _ledCharacteristic!.write(value.codeUnits, withoutResponse: false);
-      // state.setLedState(value == "1"); // <<< OPCIONAL: COMENTA O ELIMINA ESTA LÍNEA
-      debugPrint("<-- Comando LED enviado."); // Debug print
+      debugPrint("<-- Comando LED enviado.");
     } catch (e) {
-      debugPrint("XXX Error al escribir en LED: ${e.toString()}"); // Debug print
+      debugPrint("XXX Error al escribir en LED: ${e.toString()}");
       _showErrorDialog("Error", "No se pudo enviar el comando al LED: ${e.toString()}");
     }
   }
 
-  // --- _sendProfileToDevice (Sin cambios desde la versión anterior) ---
   Future<void> _sendProfileToDevice(UserProfile profile) async {
     if (_profileConfigCharacteristic == null) { _showErrorDialog("Error", "Característica de perfil no encontrada. Intenta reconectar."); return; }
-    // Verificar conexión robusta
     final currentState = await _targetDevice?.connectionState.first ?? BluetoothConnectionState.disconnected;
     if (currentState != BluetoothConnectionState.connected) {
        debugPrint("XXX Abortando escritura perfil: Estado actual NO es conectado ($currentState).");
@@ -339,7 +295,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
       await _profileConfigCharacteristic!.write(command.codeUnits, withoutResponse: false);
       debugPrint("<-- Escritura a Perfil enviada (esperando respuesta).");
       if (mounted) { ScaffoldMessenger.of(context).showSnackBar( SnackBar(content: Text('Perfil "${profile.name}" aplicado al dispositivo.')) ); }
-      state.setActiveProfile(profile); // Actualiza el perfil activo en el estado de la app
+      state.setActiveProfile(profile);
     } catch (e) {
       debugPrint("XXX Error al escribir en Perfil: ${e.toString()}");
       if (e is FlutterBluePlusException && e.code == 6) { _showErrorDialog("Error de Conexión", "El dispositivo se desconectó durante la escritura del perfil."); if(mounted) { state.updateConnectionState(false);} }
@@ -347,74 +303,97 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     }
   }
 
-  // --- _showErrorDialog (Sin cambios) ---
   void _showErrorDialog(String title, String message) {
     if (!mounted) return;
     showDialog( context: context, builder: (ctx) => AlertDialog( title: Text(title), content: Text(message), actions: [ TextButton( child: const Text("OK"), onPressed: () => Navigator.of(ctx).pop(), ) ], ), );
   }
 
-  // --- build (Sin cambios) ---
    @override
   Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final cardTheme = Theme.of(context).cardTheme;
+
     return Consumer<SmartHomeState>(
       builder: (context, homeState, child) {
         return Scaffold(
-          backgroundColor: Colors.grey[100],
           appBar: AppBar(
-            title: const Text("Panel de Control IoT"), backgroundColor: Colors.indigo, foregroundColor: Colors.white, centerTitle: true,
+            title: const Text("Panel de Control"),
             actions: [
-              IconButton( icon: const Icon(Icons.person_outline), tooltip: "Gestionar Perfiles",
+              IconButton(
+                icon: const Icon(Icons.person_outline),
+                tooltip: "Gestionar Perfiles",
                 onPressed: () async {
-                  debugPrint("Navegando a ProfilesScreen...");
-                  debugPrint("Estado antes de navegar: isConnected = ${context.read<SmartHomeState>().isConnected}");
-                  final selectedProfile = await Navigator.of(context).push<UserProfile?>( MaterialPageRoute(builder: (ctx) => const ProfilesScreen()), );
-                  debugPrint("Regresó de ProfilesScreen."); debugPrint("Perfil seleccionado: ${selectedProfile?.name ?? 'Ninguno (null)'}");
-                  // Re-leer el estado de conexión por si cambió mientras estaba en la otra pantalla
+                  final selectedProfile = await Navigator.of(context).push<UserProfile?>(
+                    MaterialPageRoute(builder: (ctx) => const ProfilesScreen()),
+                  );
                   final bool isConnectedNow = context.read<SmartHomeState>().isConnected;
-                  debugPrint("Estado después de navegar: isConnected = $isConnectedNow");
                   if (selectedProfile != null) {
-                    debugPrint("selectedProfile NO es null. Verificando conexión...");
                     if (isConnectedNow) {
-                       debugPrint("Está conectado. Llamando a _sendProfileToDevice...");
                        await _sendProfileToDevice(selectedProfile);
                     } else {
-                       debugPrint("NO está conectado. Estableciendo perfil localmente...");
                        context.read<SmartHomeState>().setActiveProfile(selectedProfile);
                        if (mounted) { ScaffoldMessenger.of(context).showSnackBar( SnackBar(content: Text('Perfil "${selectedProfile.name}" se activará al conectar.')) ); }
                     }
-                  } else {
-                    debugPrint("selectedProfile ES null. ¿Desactivar perfil?");
-                    // Opcional: Desactivar el perfil activo si no se seleccionó ninguno nuevo
-                    // context.read<SmartHomeState>().setActiveProfile(null);
-                    // if (isConnectedNow) { /* Quizás enviar un perfil "default" o comando para desactivar */ }
                   }
                 },
               )
             ],
           ),
-          body: ListView( padding: const EdgeInsets.all(16.0), children: <Widget>[
-              _buildStatusCard(homeState), const SizedBox(height: 20),
-              const Text("Controles", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)), const SizedBox(height: 10),
-              // Usar GridView para permitir más controles en el futuro
-              GridView.count( crossAxisCount: 2, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), crossAxisSpacing: 16, mainAxisSpacing: 16, childAspectRatio: 1.1, // Ajusta esto para el tamaño deseado
+          body: ListView(
+            padding: const EdgeInsets.all(16.0),
+            children: <Widget>[
+              _buildStatusCard(homeState), // Tarjeta de estado
+
+              // --- SECCIÓN CONTROLES REINCORPORADA ---
+              const SizedBox(height: 24),
+              Text("Controles", style: textTheme.titleLarge),
+              const SizedBox(height: 12),
+              // Usamos GridView aunque solo haya un control, para facilitar añadir más en el futuro
+              GridView.count(
+                crossAxisCount: 2, // Mantenemos 2 columnas
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisSpacing: 16,
+                mainAxisSpacing: 16,
+                childAspectRatio: 1.0, // Tarjetas cuadradas
                 children: [
-                  _buildLightControlCard(homeState),
-                  // Aquí podrías añadir más tarjetas de control si tuvieras más actuadores
+                  _buildLightControlCard(homeState), // <<< AQUÍ ESTÁ EL CONTROL DEL LED
+                  // Puedes añadir más tarjetas aquí si quieres
                 ],
               ),
-              const SizedBox(height: 20),
-              const Text("Sensores Ambientales", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)), const SizedBox(height: 10),
-              // Mostrar gauges solo si está conectado Y los sensores están habilitados por perfil (o no hay perfil)
+              // --- FIN SECCIÓN CONTROLES ---
+
+              const SizedBox(height: 24),
+              Text("Sensores Ambientales", style: textTheme.titleLarge),
+              const SizedBox(height: 12),
+
+              // --- DISEÑO SENSORES EN FILA (SIN LUZ) ---
               if (homeState.isConnected && (homeState.activeProfile?.sensorsEnabled ?? true))
-                GridView.count( crossAxisCount: 2, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), crossAxisSpacing: 16, mainAxisSpacing: 16, childAspectRatio: 0.85, // Ajusta para el tamaño de los gauges
-                  children: [
-                    _buildSensorGauge("Temperatura", homeState.temperature, "°C", 0, 50, Colors.redAccent),
-                    _buildSensorGauge("Humedad", homeState.humidity, "%", 0, 100, Colors.blueAccent),
-                    _buildSensorGauge("Luz", homeState.lightLevel, "", 0, 4095, Colors.amber), // Asumiendo LDR da 0-4095
-                  ],
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 16.0),
+                  decoration: BoxDecoration(
+                    color: cardTheme.color ?? AppColors.card,
+                    borderRadius: (cardTheme.shape as RoundedRectangleBorder?)?.borderRadius ?? BorderRadius.circular(16.0),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.08),
+                        blurRadius: cardTheme.elevation ?? 2.0,
+                        offset: const Offset(0, 1),
+                      ),
+                    ]
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      // Solo incluimos Temperatura y Humedad
+                      Expanded(child: _buildSensorGauge("Temperatura", homeState.temperature, "°C", 0, 50, AppColors.sensorTemp)),
+                      Expanded(child: _buildSensorGauge("Humedad", homeState.humidity, "%", 0, 100, AppColors.sensorHumid)),
+                      // ELIMINADO: Expanded(child: _buildSensorGauge("Luz", homeState.lightLevel, "lx", 0, 4095, AppColors.sensorLight)),
+                    ],
+                  ),
                 )
               else
-                _buildSensorPlaceholder(homeState.isConnected, homeState.activeProfile?.sensorsEnabled ?? true), // Pasa el estado de habilitación
+                _buildSensorPlaceholder(homeState.isConnected, homeState.activeProfile?.sensorsEnabled ?? true),
             ],
           ),
         );
@@ -424,29 +403,65 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
 
   // --- Widgets Auxiliares ---
 
-  // Tarjeta de Estado y Conexión
+  // Tarjeta de Estado y Conexión (sin cambios)
   Widget _buildStatusCard(SmartHomeState homeState) {
-     return Card( elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-      child: Padding( padding: const EdgeInsets.all(16.0), child: Column( children: [
-            Row( mainAxisAlignment: MainAxisAlignment.center, children: [
-                Icon( homeState.isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled, size: 30, color: homeState.isConnected ? Colors.indigo : Colors.grey, ), const SizedBox(width: 10),
-                Expanded( child: Text( homeState.statusMessage, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500), textAlign: TextAlign.center, ), ), ], ),
-            // Mostrar perfil activo si existe
+     return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  homeState.isConnected ? Icons.bluetooth_connected : Icons.bluetooth_disabled,
+                  size: 30,
+                  color: homeState.isConnected ? AppColors.primary : AppColors.textSecondary,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    homeState.statusMessage,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(color: AppColors.textSecondary),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ],
+            ),
             if (homeState.activeProfile != null)
               Padding(
                 padding: const EdgeInsets.only(top: 12.0, bottom: 8.0),
-                child: Row( mainAxisAlignment: MainAxisAlignment.center, children: [
-                     const Icon(Icons.label_important_outline, size: 18, color: Colors.deepPurple), const SizedBox(width: 5),
-                     Text( 'Perfil Activo: ${homeState.activeProfile!.name}', style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.deepPurple, fontSize: 15), ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                     const Icon(Icons.label_important_outline, size: 18, color: AppColors.primaryDark),
+                     const SizedBox(width: 5),
+                     Text(
+                       'Perfil: ${homeState.activeProfile!.name}',
+                       style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.primaryDark, fontSize: 15),
+                     ),
                    ],
                  ),
               ),
             const SizedBox(height: 16),
-            ElevatedButton( onPressed: _isScanning ? _stopScan : (homeState.isConnected ? _disconnectFromDevice : _startScan),
-              style: ElevatedButton.styleFrom( backgroundColor: _isScanning ? Colors.orangeAccent : (homeState.isConnected ? Colors.redAccent : Colors.indigo), foregroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)), minimumSize: const Size(200, 45) ),
+            ElevatedButton(
+              onPressed: _isScanning ? _stopScan : (homeState.isConnected ? _disconnectFromDevice : _startScan),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _isScanning
+                    ? AppColors.accentOrange
+                    : (homeState.isConnected ? AppColors.accentRed : AppColors.primary),
+                minimumSize: const Size(200, 48),
+              ),
               child: _isScanning
-                  ? const Row( mainAxisSize: MainAxisSize.min, children: [ SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3)), SizedBox(width: 10), Text("Buscando... (Cancelar)") ],)
-                  : Text(homeState.isConnected ? "Desconectar" : "Buscar y Conectar"),
+                  ? const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3)),
+                        SizedBox(width: 12),
+                        Text("Buscando...")
+                      ],
+                    )
+                  : Text(homeState.isConnected ? "Desconectar" : "Conectar"),
             ),
           ],
         ),
@@ -454,81 +469,154 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     );
   }
 
-  // Tarjeta de Control de Luz (Sin cambios respecto a la versión anterior con lógica onTap corregida)
+  // --- WIDGET CONTROL LUZ REINCORPORADO (CON ESTILO ACTUALIZADO) ---
   Widget _buildLightControlCard(SmartHomeState homeState) {
     bool isConnected = homeState.isConnected;
     UserProfile? activeProfile = homeState.activeProfile;
     bool lightsFeatureEnabled = activeProfile?.lightsEnabled ?? true;
     bool isBlinking = activeProfile?.isBlinkingMode ?? false;
-    bool isAutoOff = activeProfile?.isAutoOffMode ?? false;
-    // Permitir tap si está conectado, la función está habilitada Y NO está en modo parpadeo.
     bool allowTap = isConnected && lightsFeatureEnabled && !isBlinking;
-    bool isOn = homeState.ledIsOn; // Usa el estado REAL del LED
+    bool isOn = homeState.ledIsOn;
 
-    Color cardColor = Colors.grey.shade200; Color contentColor = Colors.grey.shade400;
-    IconData iconData = Icons.lightbulb_outline; String statusText = "Desconectado";
+    Color bgColor;
+    Color contentColor;
+    IconData iconData;
+    String statusText;
 
-    if (isConnected) {
-      if (lightsFeatureEnabled) {
-          if (isBlinking) { cardColor = Colors.lightBlue.shade100; contentColor = Colors.lightBlue.shade800; iconData = Icons.wb_incandescent_outlined; statusText = "Parpadeo (Perfil)"; }
-          else if (isAutoOff) { cardColor = isOn ? Colors.orange.shade100 : Colors.white; contentColor = isOn ? Colors.orange.shade800 : Colors.grey.shade600; iconData = isOn ? Icons.timer_outlined : Icons.lightbulb_outline; statusText = "Auto-Apagado (Perfil)"; }
-          else { cardColor = isOn ? Colors.amber.shade100 : Colors.white; contentColor = isOn ? Colors.amber.shade800 : Colors.grey.shade600; iconData = isOn ? Icons.lightbulb : Icons.lightbulb_outline; statusText = isOn ? "Encendida" : "Apagada"; }
-      } else { cardColor = Colors.grey.shade300; contentColor = Colors.grey.shade500; iconData = Icons.lightbulb_outline; statusText = "Deshab. (Perfil)"; }
+    if (!isConnected) {
+      bgColor = AppColors.card.withOpacity(0.5);
+      contentColor = AppColors.textSecondary.withOpacity(0.5);
+      iconData = Icons.lightbulb_outline;
+      statusText = "Desconectado";
+    } else if (!lightsFeatureEnabled) {
+      bgColor = AppColors.card.withOpacity(0.8);
+      contentColor = AppColors.textSecondary.withOpacity(0.7);
+      iconData = Icons.lightbulb_outline;
+      statusText = "Deshab. (Perfil)";
+    } else if (isBlinking) {
+      bgColor = AppColors.sensorHumid.withOpacity(0.1); // Usamos un color distintivo para parpadeo
+      contentColor = AppColors.sensorHumid;
+      iconData = Icons.wb_incandescent_outlined; // Icono diferente para parpadeo
+      statusText = "Parpadeo (Perfil)";
+    } else if (isOn) {
+      // ESTADO ENCENDIDO
+      bgColor = AppColors.primary; // Fondo con color primario
+      contentColor = AppColors.textOnPrimary; // Texto/Icono blanco
+      iconData = Icons.lightbulb; // Icono relleno
+      statusText = "Encendida";
+    } else {
+      // ESTADO APAGADO
+      bgColor = AppColors.card; // Fondo blanco/tarjeta
+      contentColor = AppColors.textPrimary; // Texto/Icono oscuro
+      iconData = Icons.lightbulb_outline; // Icono contorno
+      statusText = "Apagada";
     }
 
-    return Card( elevation: 4, color: cardColor, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+    return Card(
+      elevation: isOn ? 4 : 2,
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: allowTap
-            ? () => _writeToLedCharacteristic(isOn ? "0" : "1") // Envía comando para cambiar estado
-            : () { // Mensaje si no está permitido
+            ? () => _writeToLedCharacteristic(isOn ? "0" : "1")
+            : () {
                String message = '';
                if (!isConnected) message = 'Conéctate al dispositivo primero.';
                else if (!lightsFeatureEnabled) message = 'Control de luces deshabilitado por el perfil.';
-               else if (isBlinking) message = 'Modo parpadeo activo (Perfil). Control manual bloqueado.';
+               else if (isBlinking) message = 'Modo parpadeo activo. Control manual bloqueado.';
                if (message.isNotEmpty && mounted) { ScaffoldMessenger.of(context).showSnackBar( SnackBar(content: Text(message), duration: const Duration(seconds: 2)) ); }
              },
-        borderRadius: BorderRadius.circular(15),
-        child: Padding( padding: const EdgeInsets.all(8.0),
-          child: Column( mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(iconData, size: 40, color: contentColor), const SizedBox(height: 8),
-              Text( "Luz", style: TextStyle( fontSize: 18, fontWeight: FontWeight.bold, color: contentColor, ), textAlign: TextAlign.center, ), const SizedBox(height: 4),
-              Text( statusText, style: TextStyle(fontSize: 14, color: contentColor.withOpacity(0.8)), textAlign: TextAlign.center, ),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          color: bgColor,
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Icon(iconData, size: 40, color: contentColor),
+              const SizedBox(height: 12),
+              Text(
+                "LED", // Cambiado de "Luz" a "LED"
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(color: contentColor),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                statusText,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: contentColor.withOpacity(0.8)),
+                textAlign: TextAlign.center,
+              ),
             ],
           ),
         ),
       ),
     );
  }
+ // --- FIN WIDGET CONTROL LUZ ---
 
-  // Widget Sensor Gauge (Sin cambios)
+
+  // Widget Sensor Gauge (sin Card)
   Widget _buildSensorGauge(String title, double value, String unit, double min, double max, Color color) {
      bool isInvalid = value.isNaN;
-     // Asegurar que el valor esté dentro de los límites para el gauge, incluso si es inválido
      double displayValue = isInvalid ? min : value.clamp(min, max);
 
-     return Card( elevation: 4, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)), child: Padding( padding: const EdgeInsets.all(12.0), child: Column( mainAxisAlignment: MainAxisAlignment.center, children: [
-            Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)), const SizedBox(height: 5),
-            Expanded( child: SfRadialGauge( axes: <RadialAxis>[ RadialAxis( minimum: min, maximum: max, showLabels: false, showTicks: false, axisLineStyle: const AxisLineStyle( thickness: 0.15, cornerStyle: CornerStyle.bothCurve, color: Color.fromARGB(255, 224, 224, 224), thicknessUnit: GaugeSizeUnit.factor, ),
-                    pointers: <GaugePointer>[ RangePointer( value: displayValue, // Usa el valor ajustado
-                                                             cornerStyle: CornerStyle.bothCurve, width: 0.15, sizeUnit: GaugeSizeUnit.factor, color: isInvalid ? Colors.grey.shade400 : color, enableAnimation: true, animationDuration: 800, animationType: AnimationType.ease, ) ],
-                    annotations: <GaugeAnnotation>[ GaugeAnnotation( positionFactor: 0.1, angle: 90, widget: Text( isInvalid ? "-- $unit" : "${value.toStringAsFixed(title == "Luz" ? 0 : 1)} $unit", // Muestra el valor original (o --)
-                                                                                                                   style: TextStyle( fontSize: 18, fontWeight: FontWeight.bold, color: isInvalid ? Colors.grey.shade600 : color, ), ), ) ],
-                  ) ], ), ),
-          ],
+     return Column(
+       mainAxisAlignment: MainAxisAlignment.center,
+       children: [
+        Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontSize: 16)),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 100,
+          child: SfRadialGauge(
+            axes: <RadialAxis>[
+              RadialAxis(
+                minimum: min, maximum: max, showLabels: false, showTicks: false,
+                axisLineStyle: AxisLineStyle(
+                  thickness: 0.15, cornerStyle: CornerStyle.bothCurve,
+                  color: AppColors.background, thicknessUnit: GaugeSizeUnit.factor,
+                ),
+                pointers: <GaugePointer>[
+                  RangePointer(
+                    value: displayValue, cornerStyle: CornerStyle.bothCurve, width: 0.15,
+                    sizeUnit: GaugeSizeUnit.factor, color: isInvalid ? AppColors.textSecondary.withOpacity(0.3) : color,
+                    enableAnimation: true, animationDuration: 800, animationType: AnimationType.ease,
+                  )
+                ],
+                annotations: <GaugeAnnotation>[
+                  GaugeAnnotation(
+                    positionFactor: 0.5, angle: 90,
+                    widget: Text(
+                      isInvalid ? "--" : value.toStringAsFixed(title == "Luz" ? 0 : 1),
+                      style: TextStyle( fontSize: 16, fontWeight: FontWeight.bold, color: isInvalid ? AppColors.textSecondary : color, ),
+                    ),
+                  ),
+                   GaugeAnnotation(
+                    positionFactor: 0.75, angle: 90,
+                    widget: Text( unit, style: TextStyle( fontSize: 12, fontWeight: FontWeight.normal, color: isInvalid ? AppColors.textSecondary.withOpacity(0.7) : color.withOpacity(0.7), ), ),
+                  )
+                ],
+              )
+            ],
+          ),
         ),
-      ),
+      ],
     );
   }
 
  // Placeholder Sensores (Sin cambios)
   Widget _buildSensorPlaceholder(bool isConnected, bool sensorsEnabledByProfile) {
-     String message; IconData icon; Color color = Colors.grey.shade500;
+     String message; IconData icon; Color color = AppColors.textSecondary;
      if (!isConnected) { message = "Conecta el dispositivo para ver los sensores."; icon = Icons.bluetooth_disabled; }
-     else if (!sensorsEnabledByProfile) { message = "Sensores deshabilitados por el perfil activo."; icon = Icons.sensors_off_outlined; color = Colors.orange.shade700; }
+     else if (!sensorsEnabledByProfile) { message = "Sensores deshabilitados por el perfil activo."; icon = Icons.sensors_off_outlined; color = AppColors.accentOrange; }
      else { message = "Esperando datos de los sensores..."; icon = Icons.sensors_outlined; }
-     return Card( elevation: 2, color: Colors.grey.shade100, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)), child: Container( height: 200, alignment: Alignment.center, padding: const EdgeInsets.all(16.0), child: Column( mainAxisAlignment: MainAxisAlignment.center, children: [
+
+     return Card(
+       color: AppColors.background, elevation: 0,
+       child: Container(
+         height: 150, alignment: Alignment.center, padding: const EdgeInsets.all(16.0),
+         child: Column( mainAxisAlignment: MainAxisAlignment.center, children: [
              Icon(icon, size: 40, color: color), const SizedBox(height: 12),
-             Text( message, textAlign: TextAlign.center, style: TextStyle(color: color, fontSize: 16), ),
+             Text( message, textAlign: TextAlign.center, style: TextStyle(color: color, fontSize: 16, fontWeight: FontWeight.w500), ),
            ]
          ),
        ),
