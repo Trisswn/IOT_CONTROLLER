@@ -6,15 +6,21 @@ import 'package:shared_preferences/shared_preferences.dart'; // Para guardar dat
 import 'profile_model.dart'; // Importa el modelo de perfil que creamos
 
 class SmartHomeState extends ChangeNotifier {
-  // --- Estado original ---
+  // --- Estado Conexión y Sensores ---
   bool _isConnected = false;
-  bool _ledIsOn = false;
   String _statusMessage = "Busca un dispositivo para conectar.";
-  double _temperature = double.nan; // Inicializar como NaN
-  double _humidity = double.nan;    // Inicializar como NaN
-  // ELIMINADO: double _lightLevel = 0.0;
+  double _temperature = double.nan;
+  double _humidity = double.nan;
 
-  // --- Estado para perfiles ---
+  // --- Estado LEDs (Mapa para identificarlos por nombre de área) ---
+  Map<String, bool> _ledStates = {
+    "Sala": false,
+    "Cocina": false,
+    "Dormitorio": false,
+     // Coincidir con los nombres en getDefaultLedConfigs()
+  };
+
+  // --- Estado Perfiles ---
   List<UserProfile> _profiles = [];
   UserProfile? _activeProfile;
 
@@ -25,11 +31,11 @@ class SmartHomeState extends ChangeNotifier {
 
   // --- Getters ---
   bool get isConnected => _isConnected;
-  bool get ledIsOn => _ledIsOn;
   String get statusMessage => _statusMessage;
   double get temperature => _temperature;
   double get humidity => _humidity;
-  // ELIMINADO: double get lightLevel => _lightLevel;
+  Map<String, bool> get ledStates => Map.unmodifiable(_ledStates); // Devuelve copia inmutable
+  List<String> get ledAreaNames => _ledStates.keys.toList(); // Lista de nombres de área
 
   List<UserProfile> get profiles => _profiles;
   UserProfile? get activeProfile => _activeProfile;
@@ -40,33 +46,52 @@ class SmartHomeState extends ChangeNotifier {
     _isConnected = connected;
     if (!connected) {
       _statusMessage = "Desconectado. Busca para reconectar.";
-      _temperature = double.nan; // Resetea valores a NaN si se desconecta
+      _temperature = double.nan;
       _humidity = double.nan;
-      // ELIMINADO: _lightLevel = 0.0;
+      // Resetear estado de todos los LEDs a false al desconectar
+      _ledStates.updateAll((key, value) => false);
       _activeProfile = null;
     }
     notifyListeners();
   }
 
-  void setLedState(bool isOn) {
-    _ledIsOn = isOn;
-    notifyListeners();
+  // Actualiza el estado de un LED específico por su nombre de área
+  void setLedState(String areaName, bool isOn) {
+    if (_ledStates.containsKey(areaName)) {
+      _ledStates[areaName] = isOn;
+      notifyListeners();
+    } else {
+      print("Advertencia: Intento de actualizar estado para área desconocida '$areaName'");
+    }
   }
+
+  // Actualiza el estado de TODOS los LEDs a partir de una lista de booleanos
+  // (útil para procesar notificaciones BLE)
+  void updateAllLedStates(List<bool> states) {
+     if (states.length == _ledStates.length) {
+       List<String> keys = _ledStates.keys.toList();
+       for (int i = 0; i < keys.length; i++) {
+         _ledStates[keys[i]] = states[i];
+       }
+       notifyListeners();
+     } else {
+        print("Error: La lista de estados recibida (${states.length}) no coincide con la cantidad de LEDs (${_ledStates.length}).");
+     }
+  }
+
 
   void setStatusMessage(String message) {
     _statusMessage = message;
     notifyListeners();
   }
 
-  // MODIFICADO: Aceptar solo temp y hum
   void updateSensorReadings(double temp, double hum) {
     _temperature = temp;
     _humidity = hum;
-    // ELIMINADO: _lightLevel = light;
     notifyListeners();
   }
 
-  // --- Métodos para la gestión de perfiles ---
+  // --- Métodos Perfiles (sin cambios funcionales, pero ahora usan el nuevo UserProfile) ---
 
   Future<void> loadProfiles() async {
     final prefs = await SharedPreferences.getInstance();
@@ -75,11 +100,26 @@ class SmartHomeState extends ChangeNotifier {
       try {
         final List<dynamic> profilesJson = jsonDecode(profilesString);
         _profiles = profilesJson.map((json) => UserProfile.fromJson(json)).toList();
+
+        // Asegurarse que los perfiles cargados tengan la estructura correcta de LEDs
+        // (Esto ayuda si se añaden/quitan LEDs después de haber guardado perfiles)
+        int expectedLedCount = UserProfile.getDefaultLedConfigs().length;
+        _profiles.forEach((profile) {
+          if(profile.ledConfigs.length != expectedLedCount) {
+             print("Advertencia: Perfil '${profile.name}' tiene ${profile.ledConfigs.length} configs de LED, se esperaban $expectedLedCount. Reemplazando con defaults.");
+             profile.ledConfigs = UserProfile.getDefaultLedConfigs();
+          }
+        });
+
       } catch (e) {
         print("Error al cargar perfiles: $e");
         _profiles = [];
       }
     }
+    // Si no hay perfiles, crear uno por defecto? (Opcional)
+    // if (_profiles.isEmpty) {
+    //   addProfile(UserProfile(name: "Default", ledConfigs: UserProfile.getDefaultLedConfigs()));
+    // }
     notifyListeners();
   }
 
@@ -89,7 +129,12 @@ class SmartHomeState extends ChangeNotifier {
     await prefs.setString('profiles', profilesString);
   }
 
+  // Añade un perfil (asegúrate de que tenga la configuración de LEDs por defecto si es nuevo)
   void addProfile(UserProfile profile) {
+     // Si es un perfil totalmente nuevo, asegurar que tenga la lista de LedConfig correcta
+     if (profile.ledConfigs.isEmpty) {
+        profile.ledConfigs = UserProfile.getDefaultLedConfigs();
+     }
     _profiles.add(profile);
     _saveProfiles();
     notifyListeners();
@@ -97,20 +142,21 @@ class SmartHomeState extends ChangeNotifier {
 
   void updateProfile(int index, UserProfile profile) {
     if (index >= 0 && index < _profiles.length) {
-      // Si el perfil actualizado es el activo, necesitamos encontrarlo por nombre
-      // antes de actualizar la lista, para actualizar la referencia _activeProfile
       String? activeProfileName = _activeProfile?.name;
       bool wasActive = activeProfileName != null && activeProfileName == _profiles[index].name;
 
-      _profiles[index] = profile; // Actualiza el perfil en la lista
+      _profiles[index] = profile;
 
-      // Si era el activo, actualiza la referencia _activeProfile con el nuevo objeto
       if (wasActive) {
-         _activeProfile = _profiles[index];
+         _activeProfile = _profiles[index]; // Actualizar la referencia del perfil activo
       }
 
       _saveProfiles();
       notifyListeners();
+
+       // Si el perfil actualizado era el activo y estamos conectados,
+       // podríamos querer reenviar la configuración al ESP32.
+       // Esto se manejará en bluetooth_control_screen al volver de la edición.
     }
   }
 
@@ -126,9 +172,10 @@ class SmartHomeState extends ChangeNotifier {
      }
   }
 
+  // Establece el perfil activo y potencialmente envía su configuración
   void setActiveProfile(UserProfile? profile) {
     _activeProfile = profile;
     notifyListeners();
-    // La lógica para enviar el perfil al dispositivo está en bluetooth_control_screen
+    // La lógica de envío está en bluetooth_control_screen
   }
 }
