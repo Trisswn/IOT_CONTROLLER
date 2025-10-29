@@ -24,6 +24,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
   BluetoothCharacteristic? _ledCharacteristic;
   BluetoothCharacteristic? _sensorCharacteristic;
   BluetoothCharacteristic? _profileConfigCharacteristic;
+  BluetoothCharacteristic? _servoCharacteristic; // Variable para Servo
 
   StreamSubscription<List<ScanResult>>? _scanSubscription;
   StreamSubscription<BluetoothConnectionState>? _connectionStateSubscription;
@@ -38,7 +39,6 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     _sensorDataSubscription?.cancel();
     _ledStateSubscription?.cancel();
     try {
-      // Intenta desconectar solo si _targetDevice no es nulo
       _targetDevice?.disconnect();
     } catch (e) {
       debugPrint("Error al desconectar en dispose: $e");
@@ -46,10 +46,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     super.dispose();
   }
 
-  // Helper para acceder al estado
   SmartHomeState get state => Provider.of<SmartHomeState>(context, listen: false);
-
-  // --- Lógica Bluetooth ---
 
   void _startScan() {
     if (_isScanning || !mounted) return;
@@ -58,18 +55,17 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     _scanSubscription?.cancel();
 
     _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
-       if (!mounted || !_isScanning) return; // Verificar estado
+       if (!mounted || !_isScanning) return;
       for (ScanResult r in results) {
         String deviceName = r.device.platformName.isNotEmpty
             ? r.device.platformName
             : r.advertisementData.localName;
-        // Compara ignorando mayúsculas/minúsculas por si acaso
         if (deviceName.toLowerCase() == TARGET_DEVICE_NAME.toLowerCase()) {
           _targetDevice = r.device;
           debugPrint('Dispositivo encontrado: ${_targetDevice!.remoteId}');
-          _stopScan(); // Detener búsqueda
-          _connectToDevice(); // Intentar conectar
-          return; // Salir del listener una vez encontrado
+          _stopScan();
+          _connectToDevice();
+          return;
         }
       }
     }, onError: (e) {
@@ -88,7 +84,6 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
        }
     });
 
-    // Seguridad adicional por si el timeout del startScan falla
     Future.delayed(const Duration(seconds: 16), () {
       if (_isScanning && mounted) {
         debugPrint("Scan timeout manual.");
@@ -103,13 +98,9 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     _scanSubscription = null;
 
     if (mounted) {
-      // Solo actualiza _isScanning si realmente estaba escaneando
       if (_isScanning) {
         setState(() => _isScanning = false);
       }
-      // Si no se encontró el dispositivo Y no estamos conectados/conectando,
-      // actualizar mensaje de estado.
-      // (_targetDevice == null) asegura que no pongamos "no encontrado" si ya estamos conectando
       if (_targetDevice == null && !state.isConnected && !_isScanning) {
          state.setStatusMessage("Dispositivo no encontrado. Toca para reintentar.");
       }
@@ -127,28 +118,23 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     _connectionStateSubscription = _targetDevice!.connectionState.listen(
       (status) {
         debugPrint("${_targetDevice?.remoteId ?? 'Device'} state: ${status.toString()}");
-        if (!mounted) return; // No hacer nada si el widget se desmontó
+        if (!mounted) return;
 
         if (status == BluetoothConnectionState.connected) {
-          state.updateConnectionState(true); // Actualiza estado y UI
+          state.updateConnectionState(true);
           state.setStatusMessage("Conectado. Descubriendo servicios...");
-          _discoverServices(); // Descubrir servicios tras conectar
+          _discoverServices();
         } else if (status == BluetoothConnectionState.disconnected) {
-           // Solo limpiar si el estado actual es conectado, para evitar llamadas múltiples
-           // y asegurar que se limpien los recursos correctamente
            if (state.isConnected) {
-              state.updateConnectionState(false); // Actualiza estado y UI
-              // Limpiar características y suscripciones
+              state.updateConnectionState(false);
               _ledCharacteristic = null;
               _sensorCharacteristic = null;
               _profileConfigCharacteristic = null;
+              _servoCharacteristic = null; // Limpiar Servo
               _sensorDataSubscription?.cancel(); _sensorDataSubscription = null;
               _ledStateSubscription?.cancel(); _ledStateSubscription = null;
-              // El mensaje ya lo pone updateConnectionState
            }
-           // Limpiar targetDevice para permitir nuevo escaneo
            _targetDevice = null;
-           // Asegurar que _isScanning sea false si nos desconectamos
            if (_isScanning) {
              setState(() => _isScanning = false);
            }
@@ -159,61 +145,53 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
         if (mounted) {
           state.updateConnectionState(false);
           state.setStatusMessage("Error de conexión.");
-           _targetDevice = null; // Limpiar para permitir reintento
+           _targetDevice = null;
         }
          _connectionStateSubscription?.cancel(); _connectionStateSubscription = null;
       },
       onDone: () {
          debugPrint("Connection state stream done (probablemente desconectado).");
-         if (mounted && state.isConnected) { // Si el stream termina inesperadamente
+         if (mounted && state.isConnected) {
             state.updateConnectionState(false);
              _targetDevice = null;
          }
           _connectionStateSubscription = null;
       },
-      cancelOnError: true // Cancelar si hay error
+      cancelOnError: true
     );
 
     try {
-      // Conectar con timeout y autoConnect=false (para evitar reconexiones automáticas inesperadas)
       await _targetDevice!.connect(timeout: const Duration(seconds: 20), autoConnect: false);
       debugPrint("Conexión inicial establecida, solicitando MTU...");
       try {
-        // Solicitar MTU mayor si es posible
         await _targetDevice!.requestMtu(256);
         debugPrint("MTU solicitado.");
       } catch (mtuError) {
-        // CORRECCIÓN: Manejar error de forma segura usando toString()
-        // No usar el operador '!' si mtuError podría ser nulo.
         debugPrint("Advertencia: No se pudo solicitar MTU: ${mtuError.toString()}. Continuando...");
       }
-      // El listener de connectionState se encargará de llamar a _discoverServices
     } catch (e) {
-      // CORRECCIÓN: Manejar error de forma segura usando toString()
       debugPrint("Error al conectar: ${e.toString()}");
       if (mounted) {
          _showErrorDialog("Error de Conexión", "No se pudo conectar: ${e.toString()}");
          state.setStatusMessage("Fallo al conectar. Toca para reintentar.");
          await _connectionStateSubscription?.cancel(); _connectionStateSubscription = null;
-         state.updateConnectionState(false); // Asegurar estado desconectado
-          _targetDevice = null; // Limpiar para permitir reintento
+         state.updateConnectionState(false);
+          _targetDevice = null;
       }
     }
   }
 
   Future<void> _disconnectFromDevice() async {
-    // Cancelar listeners primero para evitar eventos durante/después de la desconexión
     await _sensorDataSubscription?.cancel(); _sensorDataSubscription = null;
     await _ledStateSubscription?.cancel(); _ledStateSubscription = null;
     await _connectionStateSubscription?.cancel(); _connectionStateSubscription = null;
 
-    final deviceToDisconnect = _targetDevice; // Guardar referencia local
-    _targetDevice = null; // Limpiar referencia global inmediatamente
+    final deviceToDisconnect = _targetDevice;
+    _targetDevice = null;
 
     if (deviceToDisconnect != null) {
       if (mounted) state.setStatusMessage("Desconectando...");
       try {
-        // Llamar a disconnect() sobre la referencia guardada
         await deviceToDisconnect.disconnect();
         debugPrint("Desconexión solicitada para ${deviceToDisconnect.remoteId}.");
       } catch (e) {
@@ -221,58 +199,45 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
       }
     }
 
-    // Asegurar que el estado de la app se actualice a desconectado
-    // incluso si disconnect() falla o si ya estaba desconectado.
     if (mounted && state.isConnected) {
-       state.updateConnectionState(false); // Esto actualiza el mensaje también
+       state.updateConnectionState(false);
     }
   }
 
-  // CORRECCIÓN: Añadido Timeout a discoverServices
   Future<void> _discoverServices() async {
     if (_targetDevice == null || !state.isConnected || !mounted) return;
     state.setStatusMessage("Descubriendo servicios...");
 
     try {
-      // AÑADIR TIMEOUT
       List<BluetoothService> services = await _targetDevice!.discoverServices()
-          .timeout(const Duration(seconds: 15), // <-- Timeout de 15 segundos
-            onTimeout: () {
-              debugPrint("Timeout durante discoverServices");
-              // Lanzar un error personalizado para capturarlo abajo
-              throw TimeoutException('El descubrimiento de servicios tardó demasiado.');
-            }
-          );
+          .timeout(const Duration(seconds: 15), onTimeout: () {
+            throw TimeoutException('El descubrimiento de servicios tardó demasiado.');
+          });
 
       debugPrint("Servicios descubiertos: ${services.length}");
       bool foundLed = false;
       bool foundSensor = false;
       bool foundProfile = false;
+      bool foundServo = false; // Flag para Servo
 
-      // Limpiar características y suscripciones antes de buscar
       _ledCharacteristic = null;
       _sensorCharacteristic = null;
       _profileConfigCharacteristic = null;
+      _servoCharacteristic = null; // Limpiar Servo
       await _ledStateSubscription?.cancel(); _ledStateSubscription = null;
       await _sensorDataSubscription?.cancel(); _sensorDataSubscription = null;
 
-      // Buscar el servicio y características correctas
       for (var service in services) {
-        // Ignorar servicios desconocidos si es necesario (ej. servicios genéricos del SO)
-        // if(service.uuid.toString().toLowerCase() != SERVICE_UUID.toString().toLowerCase()) continue;
-        if (service.uuid == SERVICE_UUID) { // Comparación directa de Guid es más segura
+        if (service.uuid == SERVICE_UUID) {
           debugPrint("Servicio principal encontrado: ${service.uuid}");
           for (var characteristic in service.characteristics) {
-            debugPrint("  Característica: ${characteristic.uuid} | Propiedades: ${characteristic.properties}");
+             debugPrint("  Característica: ${characteristic.uuid} | Propiedades: ${characteristic.properties}");
 
-            // Característica LED
             if (characteristic.uuid == LED_CHARACTERISTIC_UUID) {
-              // Verificar propiedades Write y Notify
               if (characteristic.properties.write && characteristic.properties.notify) {
                 _ledCharacteristic = characteristic; foundLed = true;
                 debugPrint("    -> Característica LED encontrada (Write, Notify).");
                 try {
-                  // Suscribirse a notificaciones
                   await _ledCharacteristic!.setNotifyValue(true);
                   _ledStateSubscription = _ledCharacteristic!.lastValueStream.listen(
                     (value) {
@@ -280,42 +245,36 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
                         String combinedStateStr = String.fromCharCodes(value);
                         debugPrint("<<< Notificación LED recibida: '$combinedStateStr'");
                         List<String> statesStr = combinedStateStr.split(',');
-                        // Asegurar que parseamos correctamente aunque haya espacios
                         List<bool> statesBool = statesStr.map((s) => s.trim() == '1').toList();
-                        // Actualizar estado en SmartHomeState
                         state.updateAllLedStates(statesBool);
                       }
                     },
                     onError: (e) => debugPrint("Error en LED stream: $e"),
-                    cancelOnError: true // Cancelar stream si hay error
+                    cancelOnError: true
                   );
                   debugPrint("    Suscripción a notificaciones LED activada.");
                 } catch (e) {
                   debugPrint("    Error al configurar notificaciones LED: $e");
                   _showErrorDialog("Error", "No se pudieron activar las notificaciones LED: ${e.toString()}");
-                  foundLed = false; // Marcar como no encontrada si falló la configuración
+                  foundLed = false;
                 }
               } else {
                  debugPrint("    Advertencia: Característica LED encontrada pero no tiene propiedades Write Y Notify.");
               }
             }
-            // Característica Sensores
             else if (characteristic.uuid == SENSOR_CHARACTERISTIC_UUID) {
-              // Verificar propiedad Notify
               if (characteristic.properties.notify) {
                 _sensorCharacteristic = characteristic; foundSensor = true;
                 debugPrint("    -> Característica Sensor encontrada (Notify).");
                 try {
-                  // Suscribirse a notificaciones
                   await _sensorCharacteristic!.setNotifyValue(true);
                   _sensorDataSubscription = _sensorCharacteristic!.lastValueStream.listen(
                     (value) {
-                      // Procesar solo si el perfil lo permite y el widget está montado
                       if ((state.activeProfile?.sensorsEnabled ?? true) && value.isNotEmpty && mounted) {
                         try {
                           String data = String.fromCharCodes(value);
                           List<String> parts = data.split(',');
-                          if (parts.length == 2) { // Espera Temp,Hum
+                          if (parts.length == 2) {
                             double temp = double.tryParse(parts[0]) ?? double.nan;
                             double hum = double.tryParse(parts[1]) ?? double.nan;
                             state.updateSensorReadings(temp, hum);
@@ -326,26 +285,23 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
                           debugPrint("Error al parsear datos del sensor: $e");
                         }
                       } else if (mounted) {
-                        // Si los sensores están deshabilitados por perfil, enviar NaN
                         state.updateSensorReadings(double.nan, double.nan);
                       }
                     },
                     onError: (e) => debugPrint("Error en sensor stream: $e"),
-                    cancelOnError: true // Cancelar stream si hay error
+                    cancelOnError: true
                   );
                   debugPrint("    Suscripción a notificaciones Sensor activada.");
                 } catch (e) {
                   debugPrint("    Error al configurar notificaciones Sensor: $e");
                   _showErrorDialog("Error", "No se pudieron activar las notificaciones Sensor: ${e.toString()}");
-                  foundSensor = false; // Marcar como no encontrada si falló la configuración
+                  foundSensor = false;
                 }
               } else {
                  debugPrint("    Advertencia: Característica Sensor encontrada pero no tiene propiedad Notify.");
               }
             }
-            // Característica Configuración Perfil
             else if (characteristic.uuid == PROFILE_CONFIG_UUID) {
-               // Verificar si la característica permite escritura (Write o WriteWithoutResponse)
                if(characteristic.properties.write || characteristic.properties.writeWithoutResponse) {
                  _profileConfigCharacteristic = characteristic; foundProfile = true;
                  debugPrint("    -> Característica de Perfil encontrada (permite escritura).");
@@ -353,44 +309,44 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
                   debugPrint("    Advertencia: Característica de Perfil encontrada pero NO permite escritura.");
                }
             }
+            // <<<--- BUSCAR CARACTERÍSTICA SERVO ---
+            else if (characteristic.uuid == SERVO_CHARACTERISTIC_UUID) {
+               // Verificar si permite escritura (Write o WriteWithoutResponse)
+               if(characteristic.properties.write || characteristic.properties.writeWithoutResponse) {
+                 _servoCharacteristic = characteristic; foundServo = true;
+                 debugPrint("    -> Característica de Servo encontrada (permite escritura).");
+               } else {
+                  debugPrint("    Advertencia: Característica de Servo encontrada pero NO permite escritura.");
+               }
+            }
           }
-          break; // Salir del bucle de servicios una vez encontrado el principal
+          break;
         }
       }
 
-       debugPrint("Fin búsqueda de características: foundLed=$foundLed, foundSensor=$foundSensor, foundProfile=$foundProfile");
+       debugPrint("Fin búsqueda: foundLed=$foundLed, foundSensor=$foundSensor, foundProfile=$foundProfile, foundServo=$foundServo");
 
-      // Verificar si se encontraron TODAS las características necesarias
-      if (foundLed && foundSensor && foundProfile) {
+      if (foundLed && foundSensor && foundProfile && foundServo) { // <<<--- AÑADIR foundServo
         if (mounted) {
            state.setStatusMessage("¡Dispositivo listo!");
-           // Enviar perfil activo si existe (o el por defecto si se acaba de crear)
-           // Asegurarnos que activeProfile no sea nulo antes de enviar
-           final profileToSend = state.activeProfile ?? state.profiles.firstOrNull; // Tomar activo o el primero
+           final profileToSend = state.activeProfile ?? state.profiles.firstOrNull;
            if (profileToSend != null) {
-             debugPrint("Enviando perfil '${profileToSend.name}' tras descubrir servicios...");
              await _sendProfileToDevice(profileToSend);
-           } else {
-             debugPrint("No hay perfil activo o por defecto para enviar tras descubrir servicios.");
-             // Considerar crear un perfil por defecto aquí si `profiles` está vacío
-             // if (state.profiles.isEmpty) { ... crear y enviar default ... }
            }
         }
       } else {
-        // Informar qué características faltaron o fallaron
         String missing = [
-          if (!foundLed) "LED (Write+Notify)", if (!foundSensor) "Sensor (Notify)", if (!foundProfile) "Perfil (Write)"
+          if (!foundLed) "LED (W+N)", if (!foundSensor) "Sensor (N)", if (!foundProfile) "Perfil (W)", if (!foundServo) "Servo (W/WN)" // Modificado para indicar W o WN
         ].join(", ");
         final errorMessage = "Error: Faltan o fallaron características: $missing";
         debugPrint(errorMessage);
         if (mounted) {
           state.setStatusMessage(errorMessage);
           _showErrorDialog("Error de Servicio", "No se encontraron/configuraron características ($missing). Verifica firmware, UUIDs y propiedades.");
-          await _disconnectFromDevice(); // Desconectar si faltan características
+          await _disconnectFromDevice();
         }
       }
     } catch (e) {
-      // Capturar errores, incluyendo el TimeoutException
       debugPrint("Error durante o después de descubrir servicios: $e");
       if (mounted) {
         String errorMsg = e is TimeoutException
@@ -398,7 +354,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
            : "No se pudieron descubrir los servicios: ${e.toString()}";
         _showErrorDialog("Error de Servicio", errorMsg);
         state.setStatusMessage("Error al descubrir servicios.");
-        await _disconnectFromDevice(); // Desconectar en caso de error
+        await _disconnectFromDevice();
       }
     }
   }
@@ -407,7 +363,6 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
   Future<void> _writeToLedCharacteristic(int ledIndex, String value) async {
      if (!mounted) return;
      UserProfile? activeProfile = state.activeProfile;
-     // Usar try-catch por si ledIndex está fuera de rango
      LedConfig? ledConfig;
      try {
        ledConfig = (activeProfile != null && ledIndex < activeProfile.ledConfigs.length)
@@ -417,9 +372,8 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
        ledConfig = null;
      }
 
-     bool isEnabledByProfile = ledConfig?.enabled ?? true; // Habilitado por defecto si no hay perfil/config
+     bool isEnabledByProfile = ledConfig?.enabled ?? true;
      bool isBlinking = ledConfig?.isBlinkingMode ?? false;
-     // Permitir escritura solo si está conectado, habilitado por perfil Y no está en modo parpadeo
      bool allowWrite = state.isConnected && isEnabledByProfile && !isBlinking;
 
      if (!allowWrite) {
@@ -430,31 +384,25 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
        if (message.isNotEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message), duration: const Duration(seconds: 2)));
        }
-       return; // No enviar comando
+       return;
      }
 
-     // Verificar que la característica exista
      if (_ledCharacteristic == null) {
         _showErrorDialog("Error", "Característica LED no disponible. Intenta reconectar."); return;
      }
 
-     // Construir el comando "index,value"
      String command = "$ledIndex,$value";
 
      try {
        debugPrint("--> Enviando comando LED: $command");
-       // Enviar comando (con respuesta para asegurar la escritura)
        await _ledCharacteristic!.write(command.codeUnits, withoutResponse: false);
        debugPrint("<-- Comando LED enviado.");
-       // NO actualizamos el estado local aquí, esperamos la notificación del ESP32
      } catch (e) {
        debugPrint("XXX Error al escribir en LED: ${e.toString()}");
        if (mounted) {
-          // Comprobar si es un error de desconexión
           bool isDisconnectError = e is FlutterBluePlusException && e.toString().toLowerCase().contains('disconnect');
           if (isDisconnectError && state.isConnected){
              _showErrorDialog("Error de Conexión", "El dispositivo se desconectó al enviar el comando.");
-             // Forzar actualización de estado si no se detectó automáticamente
              state.updateConnectionState(false);
           } else {
              _showErrorDialog("Error", "No se pudo enviar el comando al LED: ${e.toString()}");
@@ -470,14 +418,11 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
       _showErrorDialog("Error", "Característica de perfil no encontrada. Intenta reconectar."); return;
     }
 
-    // CORRECCIÓN: Usar .first para obtener el estado actual del Stream
-    // Usar try-catch por si el dispositivo se desconecta justo aquí
     BluetoothConnectionState currentState = BluetoothConnectionState.disconnected;
     try {
       currentState = await _targetDevice?.connectionState.first ?? BluetoothConnectionState.disconnected;
     } catch (e) {
        debugPrint("Error obteniendo connectionState.first: $e");
-       // Asumir desconectado si hay error
     }
 
 
@@ -491,12 +436,11 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     debugPrint("    Comando: $command");
 
     try {
-      // Escribir perfil con respuesta
       await _profileConfigCharacteristic!.write(command.codeUnits, withoutResponse: false);
       debugPrint("<-- Escritura a Perfil enviada.");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Perfil "${profile.name}" aplicado al dispositivo.')));
-        state.setActiveProfile(profile); // Actualizar perfil activo en el estado
+        state.setActiveProfile(profile);
       }
     } catch (e) {
       debugPrint("XXX Error al escribir en Perfil: ${e.toString()}");
@@ -504,7 +448,6 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
         bool isDisconnectError = e is FlutterBluePlusException && e.toString().toLowerCase().contains('disconnect');
         if (isDisconnectError) {
           _showErrorDialog("Error de Conexión", "El dispositivo se desconectó durante el envío del perfil.");
-          // Forzar actualización de estado si no se detectó automáticamente
            if (state.isConnected) state.updateConnectionState(false);
         } else {
           _showErrorDialog("Error al enviar perfil", "No se pudo enviar la configuración: ${e.toString()}");
@@ -512,6 +455,46 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
       }
     }
   }
+
+
+  // <<<--- FUNCIÓN CORREGIDA PARA ESCRIBIR AL SERVO ---
+  Future<void> _writeToServoCharacteristic(String command) async {
+     if (!mounted || !state.isConnected) {
+       _showErrorDialog("Error", "Dispositivo no conectado.");
+       return;
+     }
+     if (_servoCharacteristic == null) {
+        _showErrorDialog("Error", "Característica del Servo no disponible. Intenta reconectar."); return;
+     }
+
+     try {
+       debugPrint("--> Enviando comando Servo: $command");
+       // CORRECCIÓN: Usar withoutResponse: true porque añadimos PROPERTY_WRITE_NR en ESP32
+       await _servoCharacteristic!.write(command.codeUnits, withoutResponse: true);
+       debugPrint("<-- Comando Servo enviado.");
+       // Mostrar un SnackBar de confirmación
+       if (mounted) {
+         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Comando "$command" enviado a la puerta.'),
+            duration: const Duration(seconds: 2)
+         ));
+       }
+     } catch (e) {
+       // Aunque withoutResponse=true, aún podría haber errores (ej. desconexión)
+       debugPrint("XXX Error al escribir en Servo: ${e.toString()}");
+       if (mounted) {
+          bool isDisconnectError = e is FlutterBluePlusException && e.toString().toLowerCase().contains('disconnect');
+          if (isDisconnectError && state.isConnected){
+             _showErrorDialog("Error de Conexión", "El dispositivo se desconectó al enviar el comando del servo.");
+             state.updateConnectionState(false);
+          } else {
+             _showErrorDialog("Error", "No se pudo enviar el comando al servo: ${e.toString()}");
+          }
+       }
+     }
+  }
+  // <<<--- FIN FUNCIÓN CORREGIDA ---
+
 
   void _showErrorDialog(String title, String message) {
     if (!mounted) return;
@@ -531,7 +514,6 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
 
     return Consumer<SmartHomeState>(
       builder: (context, homeState, child) {
-        // Obtener nombres de área dinámicamente del estado
         final ledAreaNames = homeState.ledAreaNames;
 
         return Scaffold(
@@ -545,23 +527,19 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
                    final result = await Navigator.of(context).push<UserProfile?>(
                      MaterialPageRoute(builder: (ctx) => const ProfilesScreen()),
                    );
-                   if (!mounted) return; // Verificar si sigue montado
-                   // Si se devolvió un perfil (porque era el activo y se guardó)
+                   if (!mounted) return;
                    if (result is UserProfile) {
                       final updatedProfile = result;
                      if (homeState.isConnected) {
                         debugPrint("Reenviando perfil '${updatedProfile.name}' después de editar.");
                         await _sendProfileToDevice(updatedProfile);
                      } else {
-                        // Si no está conectado, ProfilesScreen ya debió llamar a setActiveProfile
-                        // Pero lo hacemos de nuevo por si acaso, y mostramos mensaje.
-                        state.setActiveProfile(updatedProfile); // Asegura que está activo en la UI
+                        state.setActiveProfile(updatedProfile);
                         ScaffoldMessenger.of(context).showSnackBar(
                            SnackBar(content: Text('Perfil "${updatedProfile.name}" actualizado. Se aplicará al conectar.'))
                         );
                      }
                    }
-                   // Si no se devolvió perfil (se volvió atrás, se eliminó el activo, o se seleccionó otro), no hacer nada extra aquí.
                 },
               )
             ],
@@ -574,28 +552,56 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
 
               Text("Controles", style: textTheme.titleLarge),
               const SizedBox(height: 12),
-              GridView.builder( // Usar builder para N LEDs
+              GridView.builder(
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 2, crossAxisSpacing: 16, mainAxisSpacing: 16, childAspectRatio: 1.0,
                 ),
-                itemCount: ledAreaNames.length, // Usar longitud de la lista de nombres
-                shrinkWrap: true, // Para que funcione dentro de ListView
-                physics: const NeverScrollableScrollPhysics(), // Deshabilitar scroll interno
+                itemCount: ledAreaNames.length,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
                 itemBuilder: (context, index) {
-                  // Asegurar que el índice es válido para el nombre
                   if (index < ledAreaNames.length) {
                     String areaName = ledAreaNames[index];
                     return _buildLightControlCard(homeState, index, areaName);
                   }
-                  return const SizedBox.shrink(); // Widget vacío si el índice no es válido
+                  return const SizedBox.shrink();
                 },
               ),
+
+              // <<<--- CONTROL DEL SERVO (SIN CAMBIOS EN UI) ---
+              const SizedBox(height: 16),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 20.0),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.sensor_door_outlined, size: 30, color: AppColors.primaryDark),
+                      const SizedBox(width: 16),
+                      const Expanded(
+                        child: Text("Puerta Automática", style: TextStyle(fontSize: 17, fontWeight: FontWeight.w500)),
+                      ),
+                      ElevatedButton.icon(
+                        icon: const Icon(Icons.swap_horiz),
+                        label: const Text("Abrir/Cerrar"),
+                        onPressed: homeState.isConnected
+                                   ? () => _writeToServoCharacteristic("TOGGLE") // Llama a la función corregida
+                                   : null,
+                        style: ElevatedButton.styleFrom(
+                           backgroundColor: AppColors.accentOrange,
+                           foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              // <<<--- FIN CONTROL DEL SERVO ---
+
 
               const SizedBox(height: 24),
               Text("Sensores Ambientales", style: textTheme.titleLarge),
               const SizedBox(height: 12),
 
-              // Mostrar sensores solo si está conectado Y el perfil los tiene habilitados
               if (homeState.isConnected && (homeState.activeProfile?.sensorsEnabled ?? true))
                 Container(
                   padding: const EdgeInsets.symmetric(vertical: 16.0),
@@ -613,7 +619,6 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
                   ),
                 )
               else
-                // Mostrar placeholder si no conectado o deshabilitado por perfil
                 _buildSensorPlaceholder(homeState.isConnected, homeState.activeProfile?.sensorsEnabled ?? true),
             ],
           ),
@@ -622,8 +627,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     );
   }
 
-  // --- Widgets Auxiliares ---
-
+  // --- Widgets Auxiliares (sin cambios) ---
   Widget _buildStatusCard(SmartHomeState homeState) {
      return Card(
       child: Padding(
@@ -664,15 +668,13 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
               ),
             const SizedBox(height: 16),
             ElevatedButton(
-              // Permitir presionar solo si no está escaneando
               onPressed: _isScanning ? null : (homeState.isConnected ? _disconnectFromDevice : _startScan),
               style: ElevatedButton.styleFrom(
                 backgroundColor: _isScanning
                     ? AppColors.accentOrange
                     : (homeState.isConnected ? AppColors.accentRed : AppColors.primary),
-                 foregroundColor: Colors.white, // Color de texto explícito
+                 foregroundColor: Colors.white,
                 minimumSize: const Size(200, 48),
-                // Estilo para botón deshabilitado
                  disabledBackgroundColor: Colors.grey.shade400,
                  disabledForegroundColor: Colors.grey.shade700,
               ),
@@ -685,7 +687,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
                         Text("Buscando...")
                       ],
                     )
-                  : Text(homeState.isConnected ? "Desconectar" : "Buscar y Conectar"), // Texto más claro
+                  : Text(homeState.isConnected ? "Desconectar" : "Buscar y Conectar"),
             ),
           ],
         ),
@@ -703,7 +705,6 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
 
     bool isEnabledByProfile = ledConfig.enabled;
     bool isBlinking = ledConfig.isBlinkingMode;
-    // Permitir tap solo si conectado, habilitado Y no parpadeando
     bool allowTap = isConnected && isEnabledByProfile && !isBlinking;
     bool isOn = homeState.ledStates[areaName] ?? false;
 
@@ -712,7 +713,6 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     IconData iconData;
     String statusText;
 
-    // Lógica de estado visual (sin cambios)
      if (!isConnected) {
       bgColor = AppColors.card.withOpacity(0.5); contentColor = AppColors.textSecondary.withOpacity(0.5);
       iconData = Icons.lightbulb_outline; statusText = "Desconectado";
@@ -731,9 +731,9 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     }
 
     return Card(
-      elevation: isOn && isEnabledByProfile && isConnected ? 4 : 2, // Elevar solo si está ON y activo
+      elevation: isOn && isEnabledByProfile && isConnected ? 4 : 2,
       clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)), // Bordes redondeados
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)),
       child: InkWell(
         onTap: allowTap
             ? () => _writeToLedCharacteristic(ledIndex, isOn ? "0" : "1")
@@ -774,12 +774,11 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     );
  }
 
-  // CORRECCIÓN: Se añadió return
   Widget _buildSensorGauge(String title, double value, String unit, double min, double max, Color color) {
      bool isInvalid = value.isNaN;
      double displayValue = isInvalid ? min : value.clamp(min, max);
 
-     return Column( // <<<<<< RETURN
+     return Column(
        mainAxisAlignment: MainAxisAlignment.center,
        children: [
         Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontSize: 16)),
@@ -805,7 +804,7 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
                   GaugeAnnotation(
                     positionFactor: 0.5, angle: 90,
                     widget: Text(
-                      isInvalid ? "--" : value.toStringAsFixed(1), // Formato a 1 decimal
+                      isInvalid ? "--" : value.toStringAsFixed(1),
                       style: TextStyle( fontSize: 16, fontWeight: FontWeight.bold, color: isInvalid ? AppColors.textSecondary : color, ),
                     ),
                   ),
@@ -822,14 +821,13 @@ class _BluetoothControlScreenState extends State<BluetoothControlScreen> {
     );
   }
 
- // CORRECCIÓN: Se añadió return
   Widget _buildSensorPlaceholder(bool isConnected, bool sensorsEnabledByProfile) {
      String message; IconData icon; Color color = AppColors.textSecondary;
      if (!isConnected) { message = "Conecta el dispositivo para ver los sensores."; icon = Icons.bluetooth_disabled; }
      else if (!sensorsEnabledByProfile) { message = "Sensores deshabilitados por el perfil activo."; icon = Icons.sensors_off_outlined; color = AppColors.accentOrange; }
      else { message = "Esperando datos de los sensores..."; icon = Icons.sensors_outlined; }
 
-     return Card( // <<<<<< RETURN
+     return Card(
        color: AppColors.background, elevation: 0,
        child: Container(
          height: 150, alignment: Alignment.center, padding: const EdgeInsets.all(16.0),

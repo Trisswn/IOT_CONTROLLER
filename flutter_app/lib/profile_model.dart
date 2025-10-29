@@ -94,16 +94,23 @@ class UserProfile {
      ];
    }
 
+   // ---
+   // --- ¡¡¡ESTA ES LA FUNCIÓN MODIFICADA!!! ---
+   // ---
    // Método para generar el string de configuración para el ESP32
    String generateEsp32ConfigString() {
+     // Esta parte genera "L0,ena,on,off,auto|L1,..."
      String ledConfigString = ledConfigs.asMap().entries.map((entry) {
        int index = entry.key;
        LedConfig config = entry.value;
+       // Este formato "L$index,..." coincide con el sscanf(token + 3, ...) de tu .ino
        return "L$index,${config.enabled ? 1:0},${config.onInterval},${config.offInterval},${config.autoOffDuration}";
      }).join("|");
 
      String sensorConfigString = "S,${sensorsEnabled ? 1:0},$sensorReadInterval";
 
-     return "$ledConfigString|$sensorConfigString";
+     // ¡NUEVO! Añadimos el nombre al inicio, separado por "||"
+     // El ESP32 buscará "NAME:" y "||" para separar el nombre.
+     return "NAME:$name||$ledConfigString|$sensorConfigString";
    }
 }
